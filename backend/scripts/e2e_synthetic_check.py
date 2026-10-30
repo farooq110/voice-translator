@@ -34,23 +34,27 @@ def read_wav(path: Path) -> tuple[bytes, int]:
         return wav.readframes(wav.getnframes()), wav.getframerate()
 
 
-async def stream_and_collect(
-    ws, path: Path, *, chunk_ms: int, pace: bool
-) -> tuple[dict, float]:
-    pcm, rate = read_wav(path)
+async def handshake(ws) -> None:
     hello = {
         "v": 1,
         "type": "hello",
         "config": {
             "native_language": "ur",
             "preferred_language": "en",
-            "audio": {"encoding": "pcm_s16le", "sample_rate": rate, "channels": 1},
+            "audio": {"encoding": "pcm_s16le", "sample_rate": 16_000, "channels": 1},
         },
     }
     await ws.send(json.dumps(hello))
     ready = json.loads(await asyncio.wait_for(ws.recv(), 15))
     if ready.get("type") != "ready":
         raise RuntimeError(f"expected ready, got: {ready}")
+    print(f"session ready: {ready['session_id']} stt={ready['stt']['provider']}/{ready['stt']['model']}")
+
+
+async def stream_and_collect(
+    ws, path: Path, *, chunk_ms: int, pace: bool
+) -> tuple[dict, float]:
+    pcm, rate = read_wav(path)
 
     chunk_bytes = int(rate * chunk_ms / 1000) * 2
     sent_at = asyncio.get_running_loop().time()
@@ -71,6 +75,7 @@ async def stream_and_collect(
 async def run(url: str, fixtures: list[Path], chunk_ms: int, pace: bool) -> int:
     failures = 0
     async with connect(url, max_size=2**24) as ws:
+        await handshake(ws)
         for path in fixtures:
             event, wall_s = await stream_and_collect(ws, path, chunk_ms=chunk_ms, pace=pace)
             expected = EXPECTED.get(path.name)
