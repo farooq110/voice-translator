@@ -1,0 +1,32 @@
+[project]
+name = "voice-translator-backend"
+version = "0.1.0"
+description = "Real-time AI voice translator - FastAPI backend with local CPU speech recognition (Phase 1: STT MVP)."
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "numpy>=1.26,<3",
+    "faster-whisper>=1.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "httpx>=0.27",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+    "stt_real: requires the downloaded Whisper model and real audio fixtures (not mocked)",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
+
+[tool.uv]
+package = false
