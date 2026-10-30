@@ -1,16 +1,17 @@
 # CURRENT_STATE
 
-_Last updated: 2026-10-31 — end of Phase 1 implementation session_
+_Last updated: 2026-10-31 — post-approval bugfix round (KI-006) complete_
 
 ## Phase
 
-**Phase 1 — Project Foundation and Browser STT MVP** — **implementation and
-verification COMPLETE; awaiting explicit user approval for Phase 2.**
+**Phase 1 — Project Foundation and Browser STT MVP** — **implementation,
+verification COMPLETE; user-reported Phase 1 defects (wrong language, latency)
+FIXED and re-verified. Awaiting explicit user approval for Phase 2.**
 
 ## Current task
 
-None — Phase 1 completion report delivered; approval gate active (master
-prompt §23).
+None — KI-006 fix round complete (see ADR-0006, KNOWN_ISSUES.md); approval
+gate active (master prompt §23).
 
 ## Completed work
 
@@ -18,31 +19,36 @@ prompt §23).
 - Foundation: `prompt.md`, `AGENT.md`, project-state files, platform dev shim (`dev.sh`→`start.sh`), `.gitignore`.
 - Backend: uv project; settings/logging/health; protocol v1 (pydantic, strict); session manager (bounded); `/ws/audio` state machine; STT provider abstraction + faster-whisper CPU int8 (lazy load, executor off-loop); model download script; benchmark; live E2E script.
 - Frontend: Vite + React 19 + strict TS; protocol mirror with runtime validation; 18-language catalogue; WS client (backoff reconnect + ping/pong heartbeat); AudioWorklet capture (16 kHz PCM16, streaming resampler fallback, level meter); session hook; mobile-first UI (RTL-aware transcript); error banner; localStorage persistence.
-- Tests: backend 38 passed + 1 documented xfail; frontend 23 passed + typecheck + lint + build clean.
-- Real audio: edge-tts neural fixtures (en/ur/es) transcribed by the real model; ur/hi label confusion measured and documented (KI-002); benchmark recorded (RTF 0.13–0.18, 609 MiB RSS).
-- Live E2E: 3/3 PASS against `bash start.sh` on :3000 (one session, three utterances, real-time paced).
+- **KI-006 fix (user report, this round):** STT language pinned to the hello config's `native_language` (primary subtag); dead-audio gate (silence rejected before the model → `no_speech_detected`); Whisper no-speech segment filter; single-temperature greedy decode; "Transcribing…" pending indicator (status line + mic spinner); new protocol error code documented; ADR-0006.
+- Tests: backend 42 passed + 1 documented xfail; frontend 23 passed + typecheck + lint + build clean.
+- Real audio: edge-tts neural fixtures (en/ur/es) transcribed by the real model — pinned-language labels deterministic (ur/en/es, p=1.00); benchmark recorded (auto vs forced: 41–45% faster; RTF 0.10–0.13 forced).
+- Live E2E: 3/3 PASS against `bash start.sh` on :3000 (per-fixture pinned language); live silence-guard check PASS.
 - Browser smoke test (headless Chromium): render ✓, WS connected ✓, defaults ✓, graceful no-mic error ✓, persistence ✓, desktop+mobile visuals ✓ (screenshots in `download/phase1-screens/`).
-- Docs: README, docs/{architecture,audio-protocol,testing,deployment}.md, 5 ADRs, all project-state files.
+- Docs: README, docs/{architecture,audio-protocol,testing,deployment}.md, 6 ADRs, all project-state files.
 
 ## Verified work (evidence)
 
-- `backend`: `uv run pytest` → **38 passed, 1 xfailed** (xfail = documented KI-002, not a hidden failure).
+- `backend`: `uv run pytest` → **42 passed, 1 xfailed** (xfail = documented KI-002 auto-detect behavior, not a hidden failure).
+- Real-model tests (`-m stt_real`): **5 passed, 1 xfailed** — ur forced → `ur` p=1.00 Arabic script; 2 s digital silence → empty text (no hallucination).
 - `frontend`: `tsc --noEmit` ✓ · `eslint --max-warnings 0` ✓ · `vitest run` → **23 passed** · `vite build` ✓.
-- Live server: `/health` 200 (`stt.loaded: true`); `/` serves SPA; worklet asset 200.
-- `scripts/e2e_synthetic_check.py` → **all E2E checks passed** (en p=0.99, es p=0.98, ur text correct/label hi p=0.70 per KI-002).
-- Benchmark: en 926 ms / es 903 ms / ur 997 ms for 5–7 s utterances; RTF 0.13–0.18; peak RSS 609 MiB.
-- Git history: one commit per coherent work block (foundation / backend / frontend / fixtures+scripts / docs).
+- Live server: `/health` 200 (`stt.loaded: true`); `/` serves the rebuilt SPA; worklet asset 200.
+- `scripts/e2e_synthetic_check.py` → **all E2E checks passed** (en/en es/es ur/ur, p=1.00 each; `processing_ms` 537–600).
+- `scripts/silence_guard_check.py` → **PASS** (`no_speech_detected` on 2 s of digital silence).
+- Benchmark: auto 1209–1252 ms vs forced 662–745 ms avg (41–45% faster); live `processing_ms` 940–999 → 537–600 ms.
+- Git history: one commit per coherent work block.
 
 ## Actual test results
 
-See `docs/testing.md` §2–§7 (full tables) — recorded 2026-10-31.
+See `docs/testing.md` §2–§7 (full tables) — recorded 2026-10-31, updated after the KI-006 fix.
 
 ## Known issues
 
 `project-state/KNOWN_ISSUES.md`: KI-001 (no VAD — by design, Phase 2),
-KI-002 (Whisper ur/hi label confusion — measured, xfail test, Phase 3 design
-input), KI-003 (buffered audio discarded on disconnect — accepted),
-KI-004 (real-device/background behavior untested — Phase 6).
+KI-002 (auto-detect ur/hi label confusion — mitigated in production by the
+pinned language; Phase 3 design input), KI-003 (buffered audio discarded on
+disconnect — accepted), KI-004 (real-device/background behavior untested —
+Phase 6), KI-006 (wrong-language + latency user report — RESOLVED with
+verification numbers).
 
 ## Blockers
 

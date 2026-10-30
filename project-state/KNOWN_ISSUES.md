@@ -15,23 +15,30 @@ Format: description / reproduction / root cause / fix / verification / status.
 - **Verification:** pending Phase 2 measurements (before/after latency + accuracy).
 - **Status:** OPEN (planned scope, not a defect).
 
-## KI-002 — Whisper labels short Urdu utterances as Hindi (`hi`) — ur/hi confusion
+## KI-002 — Whisper labels short Urdu utterances as Hindi (`hi`) — ur/hi confusion (AUTO-DETECT path only)
 
-- **Description:** Urdu speech is transcribed *almost perfectly* in Arabic
-  script, but `language` may come back `hi` (p≈0.70–0.78) on short utterances.
-- **Reproduction:** run `uv run pytest -m stt_real` → `test_urdu_language_label_is_ur`
-  xfail; or stream `tests/fixtures/ur_greeting.wav` via `scripts/e2e_synthetic_check.py`.
+- **Description:** with *automatic* language detection (no hint), Urdu speech
+  is transcribed *almost perfectly* in Arabic script, but `language` may come
+  back `hi` (p≈0.70–0.78) on short utterances.
+- **Reproduction:** run `uv run pytest -m stt_real` →
+  `test_urdu_autodetect_label_is_ur` xfail.
 - **Root cause:** Whisper model behavior — Urdu and Hindi are registers of the
   same spoken language (Hindustani); short clips lack distinguishing cues.
   Measured on `base` AND `small` (`small` even outputs Devanagari script) —
   model size alone does not fix it.
-- **Fix (planned, Phase 3):** the translation decision engine must not trust
-  the label blindly for the ur/hi pair: candidates are script inspection of
+- **Fix (Phase 1 mitigation shipped, KI-006):** the production path no longer
+  auto-detects for the translator user's own mic — the configured
+  `native_language` is pinned as the STT language (ADR-0006). The ur/hi
+  confusion therefore cannot surface for the user's own speech. The xfail
+  test is kept to document the auto-detect behavior Phase 3 must not trust
+  blindly for the *other* participant: candidates are script inspection of
   the transcription (Arabic vs Devanagari — reliable), utterance-context
   tracking, and configurable language sets (e.g. treat {ur,hi} as one
   detection cluster when native_language ∈ {ur,hi}).
-- **Verification:** xfail test in place; will flip to strict when fixed.
-- **Status:** OPEN (documented; drives Phase 3 design).
+- **Verification:** `test_urdu_forced_language_label_is_ur` passes
+  deterministically (language=`ur`, p=1.00); live E2E ur→ur PASS.
+- **Status:** MITIGATED for Phase 1 production path (2026-10-31); OPEN as a
+  Phase 3 design input for the auto-detect path.
 
 ## KI-003 — Buffered audio is discarded on disconnect
 
@@ -54,6 +61,36 @@ Format: description / reproduction / root cause / fix / verification / status.
 - **Root cause:** Phase 6 scope.
 - **Fix:** Phase 6 test matrix (Android Chrome, desktop Chrome, iOS Safari).
 - **Status:** OPEN (planned Phase 6).
+
+## KI-006 — RESOLVED: wrong language/script/digits in transcripts + 2–3 s latency (user report)
+
+- **Description (user report, 2026-10-31):** with Urdu selected as native
+  language, transcripts appeared in "weird languages — sometimes Hindi,
+  sometimes Persian … occasionally even uncertain random numbers", and
+  transcription had ~2–3 s of latency.
+- **Reproduction (pre-fix):** stream `tests/fixtures/ur_greeting.wav` with
+  hello `native_language=ur` → auto-detect labels it `hi` (p=0.70); stream 2 s
+  of digital silence → a 447-character hallucinated pseudo-Urdu string in
+  1594 ms; bench auto-mode latencies 1209–1252 ms in-process, 940–999 ms live.
+- **Root cause:** (a) `hello.config.native_language` was stored but never
+  passed to STT — decoding ran with automatic detection (KI-002 applies) and
+  hallucinated random languages/digits on noise; (b) every flush paid a full
+  language-detection pass and the default temperature ladder can re-decode up
+  to 6×; (c) the UI showed nothing while decoding.
+- **Fix (ADR-0006):** STT language pinned to the configured native language
+  (primary subtag); dead-audio gate (peak < ≈ -80 dBFS rejected before the
+  model → `no_speech_detected`); Whisper no-speech segment filter
+  (`no_speech_prob > 0.6` AND `avg_logprob < -1.0`); single-temperature
+  greedy decode (no retry ladder); "Transcribing…" pending indicator in the
+  UI. New non-fatal error code `no_speech_detected` documented in the
+  protocol spec.
+- **Verification:** backend 42 passed + 1 documented xfail (incl. new hint,
+  regional-subtag and no-speech regression tests); real-model tests: ur
+  forced → language=`ur` p=1.00, Arabic-script ratio ≥ 0.8, dead silence →
+  empty text; frontend typecheck/lint/23 tests/build clean; live E2E 3/3
+  PASS with ur→ur; live silence check PASS; benchmark: forced 41–45% faster
+  (ur 1252→745 ms), live `processing_ms` 940–999 → 537–600 ms.
+- **Status:** RESOLVED (2026-10-31).
 
 ## KI-005 — RESOLVED: initial TTS fixtures unusable for ur/es
 

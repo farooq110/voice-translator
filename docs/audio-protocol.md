@@ -31,7 +31,7 @@ client ← {"v":1,"type":"ready","session_id":"s_…","audio":{…},"stt":{…}}
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `native_language` | string | ISO-639-1, e.g. `"ur"` — translator user only |
+| `native_language` | string | ISO-639-1, e.g. `"ur"` — translator user only. **Phase 1: pinned as the STT language** (primary subtag, `"ur-PK"` → `"ur"`) — see ADR-0006 |
 | `preferred_language` | string | ISO-639-1, e.g. `"en"` — translator user only |
 | `audio.encoding` | `"pcm_s16le"` | only supported value |
 | `audio.sample_rate` | int | must equal 16000 |
@@ -58,18 +58,23 @@ client ← {"v":1,"type":"pong","ts":123}
 | Field | Meaning |
 | --- | --- |
 | `id` | utterance id (`u_NNNNNN_hex`) |
-| `text` | transcription (empty string never sent; use `nothing_to_transcribe`) |
-| `language` | detected ISO-639-1 code, or `"unknown"` |
-| `language_probability` | 0..1 model confidence |
+| `text` | transcription (empty string never sent; use `nothing_to_transcribe` / `no_speech_detected`) |
+| `language` | Phase 1: the configured native language (primary subtag) — the STT language is **pinned** to the user's selection, not auto-detected (KI-006 fix, ADR-0006) |
+| `language_probability` | 0..1; always `1.0` when the language is pinned from hello config |
 | `audio_duration_s` | utterance length in seconds |
 | `processing_ms` | server wall time from flush receipt to event send |
 | `is_final` | always `true` in v1 (partials come with streaming in a later phase) |
-| `low_confidence` | `language_probability < LOW_CONFIDENCE_THRESHOLD` (default 0.60) |
+| `low_confidence` | `language_probability < LOW_CONFIDENCE_THRESHOLD` (default 0.60) — always `false` on the pinned path |
 
-Phase 1 semantics: **every** received utterance is transcribed with automatic
-language detection. The translation decision engine (Phase 3) will use
-`language` + `low_confidence` + the hello config to decide translate vs
-pass-through; v1 already carries all required signals.
+Phase 1 semantics: every received utterance is transcribed with the STT
+language **pinned** to `hello.config.native_language` (the translator user's
+selection is authoritative; auto-detection mislabels short utterances and
+hallucinates on noise — KI-006). Guards: digital/near-digital silence
+(peak < ≈ -80 dBFS) is rejected before decoding → `no_speech_detected`;
+segments that look like classic no-speech hallucinations are dropped. The
+translation decision engine (Phase 3) will use `language` + `low_confidence`
++ the hello config to decide translate vs pass-through for **both**
+participants; v1 already carries all required signals.
 
 ## 4. Errors
 
@@ -91,6 +96,7 @@ pass-through; v1 already carries all required signals.
 | `chunk_too_large` | no | chunk dropped |
 | `invalid_chunk_alignment` | no | odd byte count dropped |
 | `nothing_to_transcribe` | no | flush with empty/below-floor buffer |
+| `no_speech_detected` | no | audio had no recognizable speech (dead silence or hallucination-only decode) — connection stays open |
 | `stt_timeout` | no | inference exceeded `STT_TIMEOUT_SECONDS` |
 | `stt_error` | no | provider failure (connection stays open) |
 

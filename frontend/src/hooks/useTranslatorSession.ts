@@ -67,6 +67,8 @@ export interface SessionState {
   sessionId: string | null
   recording: boolean
   startingRecording: boolean
+  /** True between a flush and the arrival of its transcription (or error). */
+  transcribing: boolean
   elapsedMs: number
   micLevel: number
   transcripts: TranscriptEntry[]
@@ -85,6 +87,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
   const [startingRecording, setStartingRecording] = useState(false)
+  const [transcribing, setTranscribing] = useState(false)
   const [elapsedMs, setElapsedMs] = useState(0)
   const [micLevel, setMicLevel] = useState(0)
   const [transcripts, setTranscripts] = useState<TranscriptEntry[]>([])
@@ -118,6 +121,9 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     captureRef.current = null
     if (handle) await handle.stop()
     clientRef.current?.flush()
+    // The utterance is now on the server — show progress until the result
+    // (or an error) arrives instead of a silent dead wait.
+    setTranscribing(true)
   }, [])
 
   const handleEvent = useCallback(
@@ -139,9 +145,13 @@ export function useTranslatorSession(wsUrl: string): SessionState {
           at: Date.now(),
         }
         setTranscripts((prev) => [...prev.slice(-(MAX_TRANSCRIPTS - 1)), entry])
+        setTranscribing(false)
         return
       }
       if (event.type === 'error') {
+        // Includes no_speech_detected / stt_timeout — never leave the
+        // "Transcribing…" indicator stuck on screen.
+        setTranscribing(false)
         setError({ code: event.code, message: event.message })
       }
     },
@@ -168,19 +178,21 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     }
   }, [wsUrl, handleEvent])
 
-  // If the connection drops while recording, stop the capture immediately.
+  // If the connection drops while recording or awaiting a transcription,
+  // stop the capture immediately.
   useEffect(() => {
     if (
       (wsStatus === 'reconnecting' || wsStatus === 'closed' || wsStatus === 'error') &&
-      recordingRef.current
+      (recordingRef.current || transcribing)
     ) {
-      void stopRecording()
+      if (recordingRef.current) void stopRecording()
+      setTranscribing(false)
       setError({
         code: 'connection_lost',
         message: 'Connection lost — recording stopped. Speak again once reconnected.',
       })
     }
-  }, [wsStatus, stopRecording])
+  }, [wsStatus, stopRecording, transcribing])
 
   // Elapsed timer while recording.
   useEffect(() => {
@@ -211,6 +223,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
       recordingRef.current = true
       setRecording(true)
       setElapsedMs(0)
+      setTranscribing(false)
       setError(null)
     } catch (err) {
       const micError = err instanceof MicCaptureError ? err : null
@@ -246,6 +259,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     sessionId,
     recording,
     startingRecording,
+    transcribing,
     elapsedMs,
     micLevel,
     transcripts,

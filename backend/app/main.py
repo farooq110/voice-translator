@@ -27,7 +27,7 @@ from .stt import build_stt_provider
 from .stt.base import STTProvider
 from .ws.audio_ws import router as audio_router
 
-APP_VERSION = "0.1.0"
+APP_VERSION = "0.1.1"
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

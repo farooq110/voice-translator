@@ -3,9 +3,15 @@
 Usage (from backend/):
     HF_HOME=../models/huggingface uv run python scripts/bench_stt.py [--model base] [--runs 3]
 
-Prints per-fixture language detection, transcription (truncated) and latency
-(avg/best of N runs, RTF = processing time / audio duration), then peak RSS.
-Results are recorded in docs/testing.md after each run.
+Each fixture is timed in TWO modes:
+- auto    : automatic language detection (pre-KI-006-fix behavior);
+- forced  : language pinned from the fixture prefix (en_/ur_/es_) — the
+  production path since the KI-006 fix.
+
+Prints per-fixture language, transcription (truncated) and latency
+(avg/best of N runs, RTF = processing time / audio duration) plus the
+auto → forced speedup, then peak RSS. Results are recorded in
+docs/testing.md after each run.
 """
 
 from __future__ import annotations
@@ -63,20 +69,37 @@ def main() -> None:
 
     for fixture in fixtures:
         pcm, rate, channels = read_wav_pcm16(fixture)
-        durations: list[float] = []
-        first_text = ""
-        for _ in range(max(1, args.runs)):
-            t = time.perf_counter()
-            result = provider.transcribe_pcm(pcm, sample_rate=rate, channels=channels)
-            durations.append((time.perf_counter() - t) * 1000)
-            first_text = result.text
-        avg = sum(durations) / len(durations)
-        best = min(durations)
+        hint = fixture.name.split("_")[0]
         audio_s = len(pcm) / 2 / rate
-        rtf = (avg / 1000) / audio_s if audio_s else float("nan")
+        summary: dict[str, tuple[float, float, object]] = {}
+        for mode in ("auto", "forced"):
+            durations: list[float] = []
+            result = None
+            for _ in range(max(1, args.runs)):
+                t = time.perf_counter()
+                if mode == "forced":
+                    result = provider.transcribe_pcm(
+                        pcm, sample_rate=rate, channels=channels, language_hint=hint
+                    )
+                else:
+                    result = provider.transcribe_pcm(pcm, sample_rate=rate, channels=channels)
+                durations.append((time.perf_counter() - t) * 1000)
+            avg = sum(durations) / len(durations)
+            best = min(durations)
+            summary[mode] = (avg, best, result)
+
+        auto_avg, auto_best, auto_res = summary["auto"]
+        forced_avg, forced_best, forced_res = summary["forced"]
+        auto_rtf = (auto_avg / 1000) / audio_s if audio_s else float("nan")
+        forced_rtf = (forced_avg / 1000) / audio_s if audio_s else float("nan")
+        gain = (1 - forced_avg / auto_avg) * 100 if auto_avg else float("nan")
         print(
-            f"{fixture.name}: audio={audio_s:.2f}s lang={result.language}(p={result.language_probability:.2f}) "
-            f"stt_ms avg={avg:.0f} best={best:.0f} rtf={rtf:.2f} text={first_text[:60]!r}"
+            f"{fixture.name}: audio={audio_s:.2f}s\n"
+            f"  auto   lang={auto_res.language}(p={auto_res.language_probability:.2f}) "
+            f"stt_ms avg={auto_avg:.0f} best={auto_best:.0f} rtf={auto_rtf:.2f} text={auto_res.text[:48]!r}\n"
+            f"  forced lang={forced_res.language}(p={forced_res.language_probability:.2f}) "
+            f"stt_ms avg={forced_avg:.0f} best={forced_best:.0f} rtf={forced_rtf:.2f} text={forced_res.text[:48]!r}\n"
+            f"  speedup(auto→forced)={gain:.0f}%"
         )
 
     print(f"peak_rss_mib={peak_rss_mib():.0f}")

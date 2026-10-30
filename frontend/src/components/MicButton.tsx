@@ -1,21 +1,23 @@
 interface MicButtonProps {
   recording: boolean
   starting: boolean
+  /** A transcription is in flight — show progress in the button. */
+  busy: boolean
   disabled: boolean
   onToggle: () => void
 }
 
-export function MicButton({ recording, starting, disabled, onToggle }: MicButtonProps) {
+export function MicButton({ recording, starting, busy, disabled, onToggle }: MicButtonProps) {
   return (
     <button
       type="button"
-      className={`mic-button${recording ? ' mic-button--recording' : ''}`}
+      className={`mic-button${recording ? ' mic-button--recording' : ''}${busy ? ' mic-button--busy' : ''}`}
       onClick={onToggle}
       disabled={disabled || starting}
       aria-pressed={recording}
       aria-label={recording ? 'Stop speaking' : 'Start speaking'}
     >
-      {starting ? (
+      {(busy && !recording) || starting ? (
         <span className="mic-button__spinner" aria-hidden="true" />
       ) : recording ? (
         <svg viewBox="0 0 24 24" width="30" height="30" aria-hidden="true" fill="currentColor">

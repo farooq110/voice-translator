@@ -14,8 +14,8 @@ export function TranscriptPanel({ entries }: { entries: TranscriptEntry[] }) {
       <h2 className="panel__title">Transcript</h2>
       {entries.length === 0 ? (
         <p className="transcript-empty">
-          Press the microphone, speak, then press it again — your words appear here with
-          the detected language.
+          Press the microphone, speak, then press it again — your words appear here in your
+          language.
         </p>
       ) : (
         <ul className="transcript-list">

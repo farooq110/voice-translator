@@ -280,6 +280,11 @@ body {
   font-weight: 600;
 }
 
+.capture__status--busy {
+  color: var(--accent);
+  font-weight: 600;
+}
+
 /* ---------- transcript ---------- */
 
 .transcript-panel {

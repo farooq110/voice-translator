@@ -26,6 +26,7 @@ A task may only be marked `DONE` after implementation **and** verification.
 | P1-17 | Browser smoke test (headless Chromium) — render/connect/error-path/persistence/responsive | DONE |
 | P1-18 | Documentation: README, docs/*, 5 ADRs, project-state finalized, CHANGELOG | DONE |
 | P1-19 | Phase 1 completion report + request approval | DONE |
+| P1-20 | **KI-006 fix (user report):** pin STT language to configured native language; dead-audio gate + no-speech hallucination filter; single-temperature decode; "Transcribing…" indicator; `no_speech_detected` protocol code; ADR-0006; re-verify (backend 42+1xfail, frontend 23, live E2E 3/3 with ur→ur, silence guard PASS, 41–45% faster) | DONE |
 
 ## Phase 2 — Voice Activity Detection and Audio Optimization (NOT APPROVED — do not start)
 

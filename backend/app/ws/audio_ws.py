@@ -13,6 +13,10 @@ Invariants enforced here:
 - format must be pcm_s16le / 16 kHz / mono;
 - buffers are bounded — at `max_utterance_seconds` an auto-flush is issued;
 - STT runs on a bounded worker executor, never on the event loop;
+- STT is pinned to the hello config's `native_language` (KI-006: the user's
+  selection is authoritative; auto-detect mislabels short utterances);
+- hallucination-only results (empty after the no-speech filter) are reported
+  as `no_speech_detected`, never as an empty transcription;
 - results for closed/stale sessions are dropped, never delivered.
 """
 
@@ -226,15 +230,32 @@ class _Connection:
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)
 
+    def _language_hint(self) -> str | None:
+        """Primary subtag of the configured native language ("ur-PK" → "ur").
+
+        The translator user's selection is authoritative for their own mic
+        audio (Phase 1: only their microphone is streamed). Returns None when
+        no valid hello config is available — STT then falls back to auto
+        detection instead of guessing wrong.
+        """
+        config = self.session.config
+        if config is None or not config.native_language:
+            return None
+        primary = config.native_language.split("-", 1)[0].strip().lower()
+        return primary or None
+
     async def _transcribe_and_deliver(self, audio: bytes, utterance_id: str) -> None:
         loop = asyncio.get_running_loop()
         started = time.perf_counter()
+        hint = self._language_hint()
         try:
             result: TranscriptionResult = await asyncio.wait_for(
                 loop.run_in_executor(
                     self.executor,
                     lambda: self.stt.transcribe_pcm(
-                        audio, sample_rate=self.settings.audio_sample_rate
+                        audio,
+                        sample_rate=self.settings.audio_sample_rate,
+                        language_hint=hint,
                     ),
                 ),
                 timeout=self.settings.stt_timeout_seconds,
@@ -254,6 +275,22 @@ class _Connection:
             return
 
         processing_ms = int((time.perf_counter() - started) * 1000)
+
+        # Noise/silence decoded into nothing (hallucination filter emptied the
+        # text): report it as a recognizable, non-fatal condition instead of an
+        # empty transcription bubble.
+        if not result.text.strip():
+            logger.info(
+                "ws.no_speech session_id=%s id=%s hint=%s duration_s=%.2f processing_ms=%d",
+                self.session.id, utterance_id, hint, result.audio_duration_s, processing_ms,
+            )
+            await self.send_error(
+                "no_speech_detected",
+                "Speech could not be recognized in that utterance — try again, a little "
+                "closer to the microphone.",
+            )
+            return
+
         event = TranscriptionEvent(
             id=utterance_id,
             text=result.text,
@@ -264,8 +301,8 @@ class _Connection:
             low_confidence=self.stt.is_low_confidence(result.language_probability),
         )
         logger.info(
-            "ws.transcription session_id=%s id=%s language=%s prob=%.2f duration_s=%.2f processing_ms=%d chars=%d",
-            self.session.id, utterance_id, event.language, event.language_probability,
+            "ws.transcription session_id=%s id=%s hint=%s language=%s prob=%.2f duration_s=%.2f processing_ms=%d chars=%d",
+            self.session.id, utterance_id, hint, event.language, event.language_probability,
             event.audio_duration_s, processing_ms, len(event.text),
         )
         logger.debug("ws.transcript session_id=%s text=%r", self.session.id, event.text)

@@ -2,6 +2,41 @@
 
 All meaningful project changes. Format based on Keep a Changelog.
 
+## [0.1.1] — Phase 1 bugfix round — KI-006 (2026-10-31)
+
+User-reported: Urdu selected but transcripts appeared in Hindi/Persian-style
+script and "random numbers"; 2–3 s perceived latency.
+
+### Fixed
+- **Wrong language/script/digits:** STT was running with automatic language
+  detection although the user's native language was configured — the hint is
+  now derived from `hello.config.native_language` (primary subtag) and pinned
+  in the engine (`language_hint` on `STTProvider.transcribe_pcm`). Labels are
+  deterministic (`language` = configured language, p=1.00); wrong-script
+  output from ur/hi/fa confusion can no longer occur for the user's own mic.
+- **Silence hallucination:** 2 s of digital silence decoded into a
+  447-character pseudo-Urdu string (1594 ms) — a dead-audio gate now rejects
+  peak-silent buffers before the model runs, and Whisper's no-speech segment
+  filter drops classic hallucination segments. Fully filtered decodes surface
+  as the new non-fatal `no_speech_detected` error (documented in
+  `docs/audio-protocol.md`) instead of an empty/garbage transcript.
+- **Latency:** language pinning skips the per-flush detection pass and the
+  temperature-retry ladder is removed (`temperature=0.0`, `beam_size=1`) —
+  measured 41–45% faster (ur fixture 1252→745 ms in-process; live
+  `processing_ms` 940–999 → 537–600 ms). The UI now shows a "Transcribing…"
+  indicator (status line + mic-button spinner) while a flush is in flight.
+
+### Changed
+- `e2e_synthetic_check.py`: per-fixture connection with the fixture's
+  `native_language` (mirrors the real app; expectations now deterministic).
+- `bench_stt.py`: benchmarks auto-detect vs pinned language side by side.
+- Tests: 3 new WS-flow regression tests (hint propagation, regional-subtag
+  reduction, no-speech error) + 3 new real-model tests (forced-label,
+  dead-silence gate, auto-detect xfail renamed); backend 42 passed + 1
+  documented xfail. Frontend unchanged tests (23 passed).
+- Docs: ADR-0006, protocol spec (pinned language + `no_speech_detected`),
+  testing results, KNOWN_ISSUES (KI-002 mitigated, KI-006 resolved).
+
 ## [0.1.0] — Phase 1 — Browser STT MVP (2026-10-31)
 
 ### Added

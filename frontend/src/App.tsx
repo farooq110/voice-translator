@@ -33,9 +33,11 @@ export default function App() {
 
   const statusLine = session.recording
     ? `Listening… ${session.elapsedMs >= 1000 ? `${Math.floor(session.elapsedMs / 1000)} s` : 'just started'}`
-    : session.startingRecording
-      ? 'Starting microphone…'
-      : STATUS_HINTS[session.wsStatus]
+    : session.transcribing
+      ? 'Transcribing…'
+      : session.startingRecording
+        ? 'Starting microphone…'
+        : STATUS_HINTS[session.wsStatus]
 
   return (
     <div className="app">
@@ -81,12 +83,13 @@ export default function App() {
             <MicButton
               recording={session.recording}
               starting={session.startingRecording}
+              busy={session.transcribing}
               disabled={micDisabled}
               onToggle={session.toggleRecording}
             />
             <LevelMeter level={session.micLevel} active={session.recording} />
           </div>
-          <p className={`capture__status${session.recording ? ' capture__status--live' : ''}`} role="status">
+          <p className={`capture__status${session.recording ? ' capture__status--live' : ''}${session.transcribing ? ' capture__status--busy' : ''}`} role="status">
             {statusLine}
           </p>
         </section>

@@ -1,8 +1,13 @@
 """End-to-end check against a LIVE server: stream WAV fixtures over the
-WebSocket, verify transcription + language detection round-trip.
+WebSocket, verify transcription + language round-trip.
 
 Usage (from backend/, with the app running e.g. on :3000):
     uv run python scripts/e2e_synthetic_check.py --url ws://localhost:3000/ws/audio
+
+Each fixture is streamed on its own connection whose hello config sets
+`native_language` to the fixture's language — mirroring the real app, where
+the translator user's selection is pinned as the STT language hint (KI-006
+fix). Expectations are therefore deterministic: ur→ur, en→en, es→es.
 
 Honesty note: this drives the REAL server, REAL WebSocket protocol and REAL
 STT model with TTS-generated speech — it does not mock anything except that
@@ -19,10 +24,17 @@ from pathlib import Path
 
 from websockets.asyncio.client import connect
 
-# KI-002: Whisper may label Urdu as 'hi' (shared Hindustani) — both accepted.
+# Fixture → native language configured for that stream (forced STT hint).
+LANGUAGE_BY_FIXTURE: dict[str, str] = {
+    "en_hello.wav": "en",
+    "ur_greeting.wav": "ur",
+    "es_hola.wav": "es",
+}
+
+# With the language pinned from hello config, labels are deterministic.
 EXPECTED: dict[str, set[str]] = {
     "en_hello.wav": {"en"},
-    "ur_greeting.wav": {"ur", "hi"},
+    "ur_greeting.wav": {"ur"},
     "es_hola.wav": {"es"},
 }
 
@@ -34,13 +46,13 @@ def read_wav(path: Path) -> tuple[bytes, int]:
         return wav.readframes(wav.getnframes()), wav.getframerate()
 
 
-async def handshake(ws) -> None:
+async def handshake(ws, native_language: str) -> None:
     hello = {
         "v": 1,
         "type": "hello",
         "config": {
-            "native_language": "ur",
-            "preferred_language": "en",
+            "native_language": native_language,
+            "preferred_language": "en" if native_language != "en" else "ur",
             "audio": {"encoding": "pcm_s16le", "sample_rate": 16_000, "channels": 1},
         },
     }
@@ -48,7 +60,7 @@ async def handshake(ws) -> None:
     ready = json.loads(await asyncio.wait_for(ws.recv(), 15))
     if ready.get("type") != "ready":
         raise RuntimeError(f"expected ready, got: {ready}")
-    print(f"session ready: {ready['session_id']} stt={ready['stt']['provider']}/{ready['stt']['model']}")
+    print(f"session ready: {ready['session_id']} native={native_language} stt={ready['stt']['provider']}/{ready['stt']['model']}")
 
 
 async def stream_and_collect(
@@ -74,20 +86,21 @@ async def stream_and_collect(
 
 async def run(url: str, fixtures: list[Path], chunk_ms: int, pace: bool) -> int:
     failures = 0
-    async with connect(url, max_size=2**24) as ws:
-        await handshake(ws)
-        for path in fixtures:
+    for path in fixtures:
+        native = LANGUAGE_BY_FIXTURE.get(path.name, path.name.split("_")[0])
+        async with connect(url, max_size=2**24) as ws:
+            await handshake(ws, native)
             event, wall_s = await stream_and_collect(ws, path, chunk_ms=chunk_ms, pace=pace)
-            expected = EXPECTED.get(path.name)
-            ok = expected is None or event["language"] in expected
-            if not ok:
-                failures += 1
-            status = "PASS" if ok else "FAIL"
-            print(
-                f"[{status}] {path.name}: lang={event['language']} (expected {sorted(expected or set())}) "
-                f"p={event['language_probability']:.2f} proc_ms={event['processing_ms']} "
-                f"wall_s={wall_s:.1f} text={event['text'][:60]!r}"
-            )
+        expected = EXPECTED.get(path.name)
+        ok = expected is None or event["language"] in expected
+        if not ok:
+            failures += 1
+        status = "PASS" if ok else "FAIL"
+        print(
+            f"[{status}] {path.name}: lang={event['language']} (expected {sorted(expected or set())}) "
+            f"p={event['language_probability']:.2f} proc_ms={event['processing_ms']} "
+            f"wall_s={wall_s:.1f} text={event['text'][:60]!r}"
+        )
     return failures
 
 

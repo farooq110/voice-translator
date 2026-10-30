@@ -45,9 +45,22 @@ class STTProvider(ABC):
 
     @abstractmethod
     def transcribe_pcm(
-        self, pcm16: bytes, *, sample_rate: int, channels: int = 1
+        self,
+        pcm16: bytes,
+        *,
+        sample_rate: int,
+        channels: int = 1,
+        language_hint: str | None = None,
     ) -> TranscriptionResult:
-        """Transcribe PCM16 LE audio with automatic language detection."""
+        """Transcribe PCM16 LE audio.
+
+        `language_hint` (ISO-639-1, primary subtag) pins the engine to the
+        translator user's configured native language when provided — Phase 1
+        always passes it, because the user's selection is authoritative and
+        auto-detection mislabels short utterances (KI-002/KI-006). `None`
+        falls back to automatic language detection (used by real-model tests
+        and, later, by Phase 3 for the *other* participant's audio).
+        """
 
     def is_low_confidence(self, probability: float) -> bool:
         return probability < self.low_confidence_threshold

@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.testclient import WebSocketDisconnect
 
-from .conftest import silence_pcm
+from .conftest import FakeSTT, silence_pcm
 
 HELLO = {
     "v": 1,
@@ -55,7 +55,7 @@ def test_binary_before_hello_is_fatal(client: TestClient) -> None:
                 ws.receive_json()
 
 
-def test_full_utterance_flow(client: TestClient) -> None:
+def test_full_utterance_flow(client: TestClient, fake_stt: FakeSTT) -> None:
     with _open(client) as ws:
         ws.send_json(HELLO)
         ready = ws.receive_json()
@@ -66,11 +66,49 @@ def test_full_utterance_flow(client: TestClient) -> None:
         tr = ws.receive_json()
         assert tr["type"] == "transcription"
         assert tr["text"] == "fake transcription 1"
-        assert tr["language"] == "en"
+        # KI-006: the hello config's native language (ur) must reach the STT
+        # as a forced hint and be echoed back as the result language.
+        assert fake_stt.last_language_hint == "ur"
+        assert tr["language"] == "ur"
         assert 0.0 <= tr["language_probability"] <= 1.0
         assert tr["audio_duration_s"] == pytest.approx(0.5, abs=0.01)
         assert tr["processing_ms"] >= 0
         assert tr["is_final"] is True
+
+
+def test_regional_native_language_hint_is_reduced_to_primary_subtag(
+    client: TestClient, fake_stt: FakeSTT
+) -> None:
+    """"ur-PK" must be normalized to "ur" — Whisper speaks ISO-639-1."""
+    hello_regional = {
+        **HELLO,
+        "config": {**HELLO["config"], "native_language": "ur-PK"},
+    }
+    with _open(client) as ws:
+        ws.send_json(hello_regional)
+        assert ws.receive_json()["type"] == "ready"
+        ws.send_bytes(silence_pcm(0.3))
+        ws.send_json({"v": 1, "type": "flush"})
+        tr = ws.receive_json()
+        assert tr["type"] == "transcription"
+        assert fake_stt.last_language_hint == "ur"
+        assert tr["language"] == "ur"
+
+
+def test_no_speech_detected_when_stt_returns_empty(client_empty: TestClient) -> None:
+    """KI-006: hallucination-only decodes must surface as a recognizable,
+    non-fatal error — never as an empty transcription bubble."""
+    with _open(client_empty) as ws:
+        ws.send_json(HELLO)
+        assert ws.receive_json()["type"] == "ready"
+        ws.send_bytes(silence_pcm(0.5))
+        ws.send_json({"v": 1, "type": "flush"})
+        err = ws.receive_json()
+        assert err["type"] == "error" and err["code"] == "no_speech_detected"
+        assert err["fatal"] is False
+        # the connection stays usable
+        ws.send_json({"v": 1, "type": "ping", "ts": 7})
+        assert ws.receive_json() == {"type": "pong", "v": 1, "ts": 7}
 
 
 def test_flush_empty_buffer_warns_and_connection_survives(client: TestClient) -> None:
