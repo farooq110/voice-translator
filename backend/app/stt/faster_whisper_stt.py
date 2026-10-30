@@ -15,8 +15,20 @@ Language handling (KI-002 / KI-006, see docs/decisions/0006):
 - Segments that look like classic no-speech hallucinations (high
   `no_speech_prob` AND poor `avg_logprob` — the same rule OpenAI Whisper
   applies) are dropped instead of being surfaced as "random numbers".
-- Decoding is greedy with a single temperature (no fallback-retry ladder),
-  which bounds worst-case latency for noisy utterances.
+
+Accuracy handling (ADR-0007 — "right language, wrong content" fix):
+- Model tier `small`: `base` gets the (forced) language label right but
+  garbles and drifts away from what was actually said — measured on the ur
+  fixture, base produced a broken greeting with drifted words while small
+  produced the correct text (RTF ≈ 0.32 on 2 vCPU, int8).
+- Beam search (beam_size=5) with Whisper's standard temperature fallback
+  ladder: greedy decoding cannot recover once a hypothesis derails
+  mid-sentence; beam search keeps coherent alternatives alive and the ladder
+  retries only segments that fail the quality gates (compression ratio /
+  avg logprob), so typical-case latency is unaffected.
+- Silero VAD filter (`vad_filter=True`): non-speech regions are trimmed
+  BEFORE decoding, so room noise never gets decoded into invented words and
+  the decoder spends its budget on actual speech (also faster).
 
 The model is loaded lazily (first `ensure_loaded()` call, thread-safe) so the
 event loop never blocks on downloads or model initialization.
@@ -61,11 +73,25 @@ class FasterWhisperSTT(STTProvider):
         device: str,
         compute_type: str,
         low_confidence_threshold: float = 0.60,
+        beam_size: int = 5,
+        vad_filter: bool = True,
+        vad_min_silence_ms: int = 500,
+        vad_speech_pad_ms: int = 150,
     ) -> None:
         super().__init__(
             model_id=model_id, device=device, low_confidence_threshold=low_confidence_threshold
         )
         self.compute_type = compute_type
+        self.beam_size = max(1, int(beam_size))
+        self.vad_filter = bool(vad_filter)
+        self.vad_parameters: dict[str, int] | None = (
+            {
+                "min_silence_duration_ms": int(vad_min_silence_ms),
+                "speech_pad_ms": int(vad_speech_pad_ms),
+            }
+            if vad_filter
+            else None
+        )
         self._model: WhisperModel | None = None
         self._load_lock = threading.Lock()
         # CTranslate2 handles concurrent runs, but CPU inference is serialized
@@ -168,10 +194,16 @@ class FasterWhisperSTT(STTProvider):
                 audio,
                 language=forced_language,  # None → automatic detection
                 task="transcribe",
-                beam_size=1,  # greedy decoding — lowest CPU latency
-                temperature=0.0,  # single pass: no temperature-retry ladder
+                beam_size=self.beam_size,  # beam search — recovers derailments (ADR-0007)
+                temperature=[0.0, 0.2, 0.4, 0.6, 0.8, 1.0],
+                # ladder retries ONLY segments that fail the quality gates
+                patience=1.0,
+                compression_ratio_threshold=2.4,
+                log_prob_threshold=-1.0,
+                no_speech_threshold=0.6,
                 condition_on_previous_text=False,  # no cross-utterance context bleed
-                vad_filter=False,  # VAD is Phase 2 scope
+                vad_filter=self.vad_filter,  # trim non-speech BEFORE decoding (ADR-0007)
+                vad_parameters=self.vad_parameters,
                 without_timestamps=True,
                 log_progress=False,
             )

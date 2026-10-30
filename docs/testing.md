@@ -1,7 +1,8 @@
 # Testing — how to run + actual measured results
 
 Environment of the recorded runs: sandbox, 2 vCPU, 4.1 GB RAM, **no GPU**,
-Python 3.12.16, faster-whisper 1.2.1 / CTranslate2 4.8.4, model `base` int8.
+Python 3.12.16, faster-whisper 1.2.1 / CTranslate2 4.8.4, model `small` int8
+(ADR-0007; earlier rounds ran `base` — noted inline where it matters).
 Re-run everything with the commands below and update this file.
 
 ## 1. How to run
@@ -29,9 +30,9 @@ cd backend && uv run python scripts/silence_guard_check.py --url ws://localhost:
 cd backend && HF_HOME=../models/huggingface uv run python scripts/bench_stt.py
 ```
 
-## 2. Backend test suite — actual result (2026-10-31, after KI-006 fix)
+## 2. Backend test suite — actual result (2026-10-31, after ADR-0007)
 
-`uv run pytest` → **42 passed, 1 xfailed** in ~6 s.
+`uv run pytest` → **42 passed, 1 xfailed** in ~6 s (37 unit + 5 real-model).
 
 | Area | Tests | Notes |
 | --- | --- | --- |
@@ -54,7 +55,7 @@ deterministically.
 - `vitest run` → **23 passed** (protocol parser 10, languages 5, WS client state machine 8 — fake WebSocket, fake timers, reconnect/backoff/heartbeat paths).
 - `vite build` → ✓ (`index.html` 1.2 kB, JS 241 kB / 76 kB gzip, CSS 5.5 kB).
 
-## 4. Real STT validation — actual results (2026-10-31, after KI-006 fix)
+## 4. Real STT validation — actual results (2026-10-31, after ADR-0007: model `small`, beam5, VAD)
 
 Fixtures are **real speech audio** generated with Microsoft edge-tts **neural**
 voices (`en-US-Aria`, `ur-PK-Asad`, `es-ES-Alvaro`), 16 kHz mono PCM16 — i.e.
@@ -66,9 +67,16 @@ Production path — language **pinned** from the configured native language:
 
 | Fixture | Voice | Language | Prob | Transcription (excerpt) |
 | --- | --- | --- | --- | --- |
-| `en_hello.wav` (7.1 s) | en-US-Aria | `en` (pinned) | 1.00 | "Hello. How are you doing today? This is a test of the real-time voice translator." |
+| `en_hello.wav` (7.1 s) | en-US-Aria | `en` (pinned) | 1.00 | "Hello, how are you doing today? This is a test of the Real Time Voice Translator." |
 | `es_hola.wav` (4.9 s) | es-ES-Alvaro | `es` (pinned) | 1.00 | "Hola, ¿cómo estás? Espero que tengas un muy buen día." |
-| `ur_greeting.wav` (6.6 s) | ur-PK-Asad | `ur` (pinned) | 1.00 | "اسلام علیکم آج آپ کیسے ہیں میں بلکل تک ہوا شکریا" (Arabic script, ratio ≥ 0.8 asserted) |
+| `ur_greeting.wav` (6.6 s) | ur-PK-Asad | `ur` (pinned) | 1.00 | "السلام علیکم، آج اب کیسے ہے؟ میں بلکل ٹیک ہو شکریہ" (Arabic script, ratio ≥ 0.8 asserted) |
+
+**Accuracy comparison on `ur_greeting.wav` (KI-007, the reason for ADR-0007):**
+
+| Config | Transcription |
+| --- | --- |
+| `base` + greedy (pre-fix) | `اسلام علیکم آج آپ کیسے ہیں میں بلکل تک ہوا شکریا` — broken greeting, drifted words |
+| `small` + beam5 + VAD (post-fix) | `السلام علیکم، آج اب کیسے ہے؟ میں بلکل ٹیک ہو شکریہ` — correct greeting, punctuation, coherent |
 
 **KI-002 (still true for AUTO-detection only):** without a hint, Whisper
 *transcribes* Urdu almost perfectly (Arabic script) but the language **label**
@@ -85,40 +93,42 @@ previously decoded into **447 characters of pseudo-Urdu in 1594 ms**; after
 the dead-audio gate it is rejected before the model runs and surfaces as
 `no_speech_detected` (unit test + live check, see §6).
 
-## 5. Latency & resource benchmark — actual results (2026-10-31, after KI-006 fix)
+## 5. Latency & resource benchmark — actual results (2026-10-31, after ADR-0007: `small` + beam5 + VAD)
 
-`scripts/bench_stt.py --runs 3`, model `base` int8, CPU. Each fixture is
-timed twice: `auto` (pre-fix behavior: detect language, then decode) vs
-`forced` (post-fix: language pinned from config):
+`scripts/bench_stt.py --runs 3`, model `small` int8, CPU. Each fixture is
+timed twice: `auto` (not used in production) vs `forced` (language pinned
+from config — the production path):
 
 | Fixture (audio) | auto avg | forced avg | speedup | RTF (forced) |
 | --- | --- | --- | --- | --- |
-| en_hello (7.10 s) | 1248 ms | 713 ms | **43%** | 0.10 |
-| es_hola (4.94 s) | 1209 ms | 662 ms | **45%** | 0.13 |
-| ur_greeting (6.58 s) | 1252 ms | 745 ms | **41%** | 0.11 |
+| en_hello (7.10 s) | 3328 ms | 1887 ms | **43%** | 0.27 |
+| es_hola (4.94 s) | 3172 ms | 1783 ms | **44%** | 0.36 |
+| ur_greeting (6.58 s) | 4143 ms | 2046 ms | **51%** | 0.31 |
 
-For reference, the pre-fix baseline recorded 2026-10-31 was 903–997 ms avg
-(RTF 0.13–0.18); the machine was under different load between runs — the
-like-for-like auto/forced comparison above is the honest measurement of the
-change (same process, same run).
+Previous rounds for comparison — `base` + greedy: ur forced 745 ms
+(RTF 0.11); live `processing_ms` 537–600 ms. The ADR-0007 trade is ~3× decode
+cost for usable Urdu accuracy; **with client-side endpointing the decode now
+runs while the user keeps speaking, so perceived latency ≈ decode time only**
+— and typical sentences (2–3 s) decode in ≈ 0.6–1.0 s.
 
-- Model load: ~1.0 s warm (after download), ~16 s cold for `small`.
-- Peak RSS (bench process incl. model): **382 MiB** (pre-fix run: 609 MiB —
-  dominated by CTranslate2 allocator behavior, not by this change).
-- End-to-end (live WS, real-time-paced streaming, flush → event):
-  `processing_ms` 537–600 ms per utterance (pre-fix: 940–999 ms) —
-  transcription latency ≈ 0.6 s after the user stops speaking, on 2 vCPU.
+- Model load: ~1.5 s warm (after download); first-ever `small` download is
+  ~490 MB.
+- Peak RSS (bench process incl. model): **1062 MiB** (`small` int8; `base`
+  was 382–609 MiB) — within the 4.1 GB sandbox budget.
 
-## 6. Live E2E — actual result (2026-10-31, after KI-006 fix)
+## 6. Live E2E — actual result (2026-10-31, after ADR-0007)
 
 `scripts/e2e_synthetic_check.py` against `bash start.sh` (single-port :3000).
 Each fixture streams on its own connection with `native_language` set to the
 fixture's language — mirroring the real app:
 
 ```
-[PASS] en_hello.wav: lang=en (expected ['en']) p=1.00 proc_ms=600
-[PASS] es_hola.wav:  lang=es (expected ['es']) p=1.00 proc_ms=537
-[PASS] ur_greeting.wav: lang=ur (expected ['ur']) p=1.00 proc_ms=599
+session ready: s_7895962e8d08 native=en stt=faster-whisper/small
+[PASS] en_hello.wav: lang=en (expected ['en']) p=1.00 proc_ms=1784
+session ready: s_652dc3d04d76 native=es stt=faster-whisper/small
+[PASS] es_hola.wav:  lang=es (expected ['es']) p=1.00 proc_ms=1721
+session ready: s_7fcf3bdc741a native=ur stt=faster-whisper/small
+[PASS] ur_greeting.wav: lang=ur (expected ['ur']) p=1.00 proc_ms=1956
 all E2E checks passed
 ```
 
@@ -152,6 +162,11 @@ Headless Chromium via agent-browser against `http://localhost:3000`:
 
 - **Real microphone input on real devices** (Android Chrome, iOS Safari,
   desktop Chrome) — Phase 2/6. No claims made about device behavior.
+- **Client-side sentence endpointing thresholds** (RMS 0.01, 800 ms pause,
+  1.2 s min segment, 20 s cap) are verified by typecheck/unit tests/build
+  only; the sandbox has no real microphone, so threshold tuning on actual
+  devices is Phase 6 (KI-004). Server behavior after a client `flush` is
+  fully covered by the WS-flow tests and live E2E.
 - Background tab / screen-lock / interruption behavior — Phase 6 (KI-004).
 - iOS Safari `AudioContext(sampleRate: 16000)` support (fallback resampler
   exists in the worklet but is untested on real Safari).

@@ -17,4 +17,8 @@ def build_stt_provider(settings: Settings) -> STTProvider:
         device=settings.stt_device,
         compute_type=settings.stt_compute_type,
         low_confidence_threshold=settings.low_confidence_threshold,
+        beam_size=settings.stt_beam_size,
+        vad_filter=settings.stt_vad_filter,
+        vad_min_silence_ms=settings.stt_vad_min_silence_ms,
+        vad_speech_pad_ms=settings.stt_vad_speech_pad_ms,
     )

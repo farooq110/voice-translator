@@ -50,7 +50,7 @@ def peak_rss_mib() -> float:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", default=os.environ.get("STT_MODEL", "base"))
+    parser.add_argument("--model", default=os.environ.get("STT_MODEL", "small"))
     parser.add_argument("--runs", type=int, default=3)
     parser.add_argument(
         "--fixtures",

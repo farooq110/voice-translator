@@ -38,6 +38,33 @@ const MAX_TRANSCRIPTS = 50
 const LS_NATIVE = 'vt.native_language'
 const LS_PREFERRED = 'vt.preferred_language'
 
+// --- Sentence endpointing (client-side energy gate, ADR-0007) ---------------
+//
+// While the mic is open, a pause is detected from the per-chunk RMS and the
+// server buffer is flushed — so every sentence is transcribed as a complete,
+// pause-bounded unit while the user keeps speaking. This is what makes the
+// STT "understand sentences": Whisper receives clean sentence-sized audio
+// instead of one long blob that mixes sentences, breaths and silence (or is
+// cut mid-word by the 30 s cap). It also makes results appear live.
+const CHUNK_MS = 100 // worklet chunk cadence — onLevel fires once per chunk
+const ENDPOINT_SPEECH_RMS = 0.01 // RMS ≥ this counts as speech (mic has AGC)
+const ENDPOINT_SILENCE_MS = 800 // pause length that closes a sentence
+const ENDPOINT_MIN_SEGMENT_MS = 1_200 // never auto-flush less audio than this
+const ENDPOINT_MAX_SEGMENT_MS = 20_000 // hard cap — flush even without a pause
+
+interface EndpointState {
+  /** Audio buffered (client-side) since the last flush. */
+  bufferedMs: number
+  /** Consecutive silence at the end of the current segment. */
+  silentMs: number
+  /** Whether actual speech was seen in the current segment. */
+  speechSeen: boolean
+}
+
+function freshEndpointState(): EndpointState {
+  return { bufferedMs: 0, silentMs: 0, speechSeen: false }
+}
+
 const AUDIO_FORMAT: HelloConfig['audio'] = {
   encoding: 'pcm_s16le',
   sample_rate: TARGET_SAMPLE_RATE,
@@ -102,6 +129,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
   const clientRef = useRef<TranslatorWsClient | null>(null)
   const captureRef = useRef<CaptureHandle | null>(null)
   const recordingRef = useRef(false)
+  const endpointRef = useRef<EndpointState>(freshEndpointState())
   const configRef = useRef<HelloConfig>({
     native_language: nativeLanguage,
     preferred_language: preferredLanguage,
@@ -120,10 +148,16 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     const handle = captureRef.current
     captureRef.current = null
     if (handle) await handle.stop()
-    clientRef.current?.flush()
-    // The utterance is now on the server — show progress until the result
-    // (or an error) arrives instead of a silent dead wait.
-    setTranscribing(true)
+    // Final flush only when audio accumulated since the last (auto-)flush —
+    // otherwise the server would answer `nothing_to_transcribe` for a
+    // pause the endpointing gate already closed.
+    if (endpointRef.current.bufferedMs > 0) {
+      clientRef.current?.flush()
+      // The utterance is now on the server — show progress until the result
+      // (or an error) arrives instead of a silent dead wait.
+      setTranscribing(true)
+    }
+    endpointRef.current = freshEndpointState()
   }, [])
 
   const handleEvent = useCallback(
@@ -212,12 +246,35 @@ export function useTranslatorSession(wsUrl: string): SessionState {
       return
     }
     setStartingRecording(true)
+    endpointRef.current = freshEndpointState()
     try {
       const handle = await startMicCapture({
         onChunk: (chunk) => {
           clientRef.current?.sendAudioChunk(chunk)
         },
-        onLevel: (rms) => setMicLevel(rms),
+        onLevel: (rms) => {
+          setMicLevel(rms)
+          // Sentence endpointing: track speech/pause from the chunk RMS and
+          // flush the server buffer at every natural pause (ADR-0007).
+          const ep = endpointRef.current
+          ep.bufferedMs += CHUNK_MS
+          if (rms >= ENDPOINT_SPEECH_RMS) {
+            ep.silentMs = 0
+            ep.speechSeen = true
+          } else {
+            ep.silentMs += CHUNK_MS
+          }
+          const pauseClosedSentence =
+            ep.speechSeen &&
+            ep.bufferedMs >= ENDPOINT_MIN_SEGMENT_MS &&
+            ep.silentMs >= ENDPOINT_SILENCE_MS
+          const capReached = ep.bufferedMs >= ENDPOINT_MAX_SEGMENT_MS
+          if (pauseClosedSentence || capReached) {
+            clientRef.current?.flush()
+            endpointRef.current = freshEndpointState()
+            setTranscribing(true)
+          }
+        },
       })
       captureRef.current = handle
       recordingRef.current = true

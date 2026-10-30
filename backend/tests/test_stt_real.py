@@ -28,7 +28,7 @@ import pytest
 from app.stt.faster_whisper_stt import FasterWhisperSTT
 
 FIXTURES = Path(__file__).parent / "fixtures"
-MODEL = os.environ.get("STT_MODEL", "base")
+MODEL = os.environ.get("STT_MODEL", "small")
 
 pytestmark = pytest.mark.stt_real
 

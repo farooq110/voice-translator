@@ -17,9 +17,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--model",
-        default=os.environ.get("STT_MODEL", "base"),
+        default=os.environ.get("STT_MODEL", "small"),
         choices=["tiny", "base", "small", "medium"],
-        help="Whisper model size (default: $STT_MODEL or 'base')",
+        help="Whisper model size (default: $STT_MODEL or 'small')",
     )
     args = parser.parse_args()
 

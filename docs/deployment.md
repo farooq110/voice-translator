@@ -4,7 +4,7 @@
 
 - Python ≥ 3.11,<3.13 with [uv](https://docs.astral.sh/uv/)
 - Node ≥ 20 (LTS) with npm
-- ~700 MB disk (deps + Whisper `base` model), no GPU required
+- ~1.2 GB disk (deps + Whisper `small` model), no GPU required
 
 ## 2. Single-port production mode (recommended; also the platform default)
 
@@ -37,14 +37,15 @@ cd frontend && npm install && npm run dev   # Vite :5173, proxies /health + /ws 
 
 ```bash
 cd backend
-HF_HOME=../models/huggingface uv run python scripts/download_model.py --model base
+HF_HOME=../models/huggingface uv run python scripts/download_model.py --model small
 # Behind a filtered network:
 HF_ENDPOINT=https://hf-mirror.com HF_HOME=../models/huggingface \
-  uv run python scripts/download_model.py --model base
+  uv run python scripts/download_model.py --model small
 ```
 
 The model also auto-downloads on first use (lazily, in the background).
-`STT_MODEL` selects the size (`tiny`|`base`|`small`).
+`STT_MODEL` selects the size (`tiny`|`base`|`small`). Default `small` —
+accuracy tier for low-resource languages like Urdu (ADR-0007).
 
 ## 5. Environment variables (backend)
 
@@ -52,8 +53,10 @@ All in `backend/.env.example`; highlights:
 
 | Var | Default | Purpose |
 | --- | --- | --- |
-| `STT_MODEL` | `base` | Whisper size |
+| `STT_MODEL` | `small` | Whisper size |
 | `STT_DEVICE` / `STT_COMPUTE_TYPE` | `cpu` / `int8` | CTranslate2 runtime |
+| `STT_BEAM_SIZE` | `5` | beam width (ADR-0007 accuracy) |
+| `STT_VAD_FILTER` | `true` | Silero VAD trims non-speech before decode |
 | `STT_WORKER_THREADS` | `1` | inference executor size |
 | `STT_TIMEOUT_SECONDS` | `30` | per-utterance inference cap |
 | `MAX_CHUNK_BYTES` | `262144` | per-frame cap |

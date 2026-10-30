@@ -20,7 +20,7 @@ the required direction, and passes every other language through untouched.
 # 1) Backend (Python 3.11–3.12 + uv)
 cd backend
 uv sync                                                  # deps + venv
-HF_HOME=../models/huggingface uv run python scripts/download_model.py   # ~150 MB, once
+HF_HOME=../models/huggingface uv run python scripts/download_model.py   # ~490 MB, once
 
 # 2) Frontend (Node 20+)
 cd ../frontend && npm install && npm run build

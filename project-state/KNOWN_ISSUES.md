@@ -12,6 +12,9 @@ Format: description / reproduction / root cause / fix / verification / status.
   empty/silence transcription attempt occurs at the cap.
 - **Root cause:** VAD is explicitly a Phase 2 deliverable (master prompt §17).
 - **Fix:** planned Phase 2 (Silero VAD / energy-based segmentation + hands-free mode).
+  Partially arrived early via ADR-0007: the frontend hook now energy-gates
+  pauses while the mic is open and flushes per sentence (client-side only —
+  the server-side VAD for hands-free mode remains Phase 2 scope).
 - **Verification:** pending Phase 2 measurements (before/after latency + accuracy).
 - **Status:** OPEN (planned scope, not a defect).
 
@@ -91,6 +94,39 @@ Format: description / reproduction / root cause / fix / verification / status.
   PASS with ur→ur; live silence check PASS; benchmark: forced 41–45% faster
   (ur 1252→745 ms), live `processing_ms` 940–999 → 537–600 ms.
 - **Status:** RESOLVED (2026-10-31).
+
+## KI-007 — RESOLVED: language label correct but content wrong / drifting ("weird things") (user report)
+
+- **Description (user report, 2026-10-31):** "Now the text is appearing in
+  selected native language, but it cannot write what I am speaking correctly.
+  The accuracy is very poor — meaning it is writing completely weird things
+  straying away from the sentences I am speaking."
+- **Reproduction (pre-fix):** stream `tests/fixtures/ur_greeting.wav` with
+  hint `ur` on model `base` → `اسلام علیکم آج آپ کیسے ہیں میں بلکل تک ہوا
+  شکریا` — broken greeting, drifted words (the forced label is right, the
+  content is not). Long mic pushes mix several sentences + silence into one
+  buffer and the 30 s cap can cut mid-word.
+- **Root cause:** (a) `base` (74 M params) is below the usable-accuracy
+  threshold for Urdu — the label is forced but the content garbles;
+  (b) greedy `beam_size=1` + single temperature cannot recover from a
+  mid-sentence derailment; (c) no VAD anywhere — room noise/breaths are
+  decoded into invented words; (d) blob-shaped utterances (whole push = one
+  buffer) degrade accuracy and latency instead of clean sentence units.
+- **Fix (ADR-0007):** default model `base` → `small` (correct text on the
+  fixture, RTF 0.32 on 2 vCPU); beam search `beam_size=5` with Whisper's
+  quality-gated temperature ladder; Silero VAD filter inside faster-whisper
+  (`vad_filter=True`, 500 ms min silence, 150 ms pad) trims non-speech
+  before decode; client-side sentence endpointing in the frontend hook — a
+  ≥ 800 ms pause after ≥ 1.2 s of buffered audio flushes the sentence while
+  the mic stays open (20 s hard cap), so results appear live and the stop
+  button only closes the final segment.
+- **Verification:** bench on the ur fixture — base-greedy garble vs
+  small-beam+VAD correct `السلام علیکم، آج اب کیسے ہے؟ …`; backend suite
+  green incl. real-model ur assertions; live E2E re-run (docs/testing.md
+  §4–6); frontend typecheck/lint/tests/build clean.
+- **Status:** RESOLVED (2026-10-31). Real-device accuracy still to be
+  confirmed in Phase 6 (KI-004); `STT_MODEL`/`STT_BEAM_SIZE`/
+  `STT_VAD_FILTER` allow dialing accuracy vs latency.
 
 ## KI-005 — RESOLVED: initial TTS fixtures unusable for ur/es
 
