@@ -1,2 +1,40 @@
-skills/
+# --- Sandbox environment dirs (not part of the app repository) ---
+/upload/
+/download/
+/skills/
+/scripts/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+.ruff_cache/
+
+# --- Node ---
 node_modules/
+frontend/dist/
+
+# --- Downloaded ML models / HF cache (runtime artifacts, large) ---
+/models/
+
+# --- Secrets & local env ---
+.env
+.env.local
+.env.*.local
+
+# --- Platform runtime artifacts ---
+.zscripts/dev.log
+.zscripts/dev.pid
+.zscripts/*.log
+dev.log
+server.log
+*.pid
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+*.swp
+.idea/
+.vscode/
