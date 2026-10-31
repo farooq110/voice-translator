@@ -57,7 +57,18 @@ A task may only be marked `DONE` after implementation **and** verification.
 | P2-R2-03 | `scripts/e2e_continuous_speech_check.py` — live old-vs-new benchmark on 22.5 s compressed-silence ur speech; old baseline reproduced (first text 22.2 s), new PASS (5/5 utterances, first text 6.6 s, flush→text 1.9–2.2 s) | DONE |
 | P2-R2-04 | Re-verification: backend 65 passed + 1 xfail; frontend tsc/lint/33 tests/build clean; live E2E 3/3 PASS; silence guard PASS; built bundle carries ADR-0010 constants | DONE |
 | P2-R2-05 | Docs: ADR-0010; testing.md §1/§2/§3/§5b/§6/§7/§9; KI-009 RESOLVED; CHANGELOG 0.2.1; DECISIONS D-012; CURRENT_STATE; APP_VERSION 0.2.1 | DONE |
-| P2-R2-06 | Recreate lost `download/Phase-One.zip` (sandbox wiped `download/` between sessions): Phase-1-final tree @ `ead3fb1` + git-history bundle + MANIFEST, integrity verified | DONE |
+| P2-R2-06 | Recreate lost `download/Phase-One.zip` (sandbox wiped `download/` between sessions): Phase-1-final tree @ `3c1b5c2` (tag `phase-one-final`) + git-history bundle + MANIFEST, integrity verified | DONE |
+
+## Repository & delivery — GitHub setup (2026-11-01) — COMPLETE (push pending credentials)
+
+| ID | Task | Status |
+| --- | --- | --- |
+| GIT-01 | Repo-local Git identity set to the user's Repository Details (`user.name "m Farooq"`, `user.email khanbhi88@gmail.com`) and verified before any commit/push (user rule §3) | DONE |
+| GIT-02 | Pre-publish history alignment — all 11 commits' author/committer → `m Farooq <khanbhi88@gmail.com>` (repo never pushed; `filter-branch`; old-hash doc references updated; tag `phase-one-final` re-pointed) | DONE |
+| GIT-03 | Working-tree normalization — 14 files with accidental +x mode bits (content unchanged, 0 insertions/deletions) reverted to 644 | DONE |
+| GIT-04 | `origin` remote → `https://github.com/farooq110/voice-translator.git`; branch `phase-2` created from `main` | DONE |
+| GIT-05 | Recreate `download/Phase-One.zip` (sandbox wiped `download/` again): Phase-1-final tree @ tag `phase-one-final` + git-history bundle + MANIFEST, integrity verified | DONE |
+| GIT-06 | Push `phase-2` to origin — sandbox has no GitHub credentials (no PAT / SSH binary / credential helper); everything is push-ready, awaiting the user's token | PENDING |
 
 ## Phase 3+ — see `prompt.md` section 17
 
