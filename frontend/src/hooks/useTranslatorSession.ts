@@ -51,6 +51,11 @@ const ENDPOINT_SPEECH_RMS = 0.01 // RMS ≥ this counts as speech (mic has AGC)
 const ENDPOINT_SILENCE_MS = 800 // pause length that closes a sentence
 const ENDPOINT_MIN_SEGMENT_MS = 1_200 // never auto-flush less audio than this
 const ENDPOINT_MAX_SEGMENT_MS = 20_000 // hard cap — flush even without a pause
+// Tail-capture window (KI-008): when stop is tapped the mic stays open this
+// much longer so the final words are padded with REAL trailing silence —
+// tapping stop the instant speech ends hard-cuts the last word against the
+// buffer edge, which is the main cause of garbage transcripts.
+const TAIL_CAPTURE_MS = 700
 
 interface EndpointState {
   /** Audio buffered (client-side) since the last flush. */
@@ -94,6 +99,8 @@ export interface SessionState {
   sessionId: string | null
   recording: boolean
   startingRecording: boolean
+  /** True during the tail-capture window after tapping stop (KI-008). */
+  finishing: boolean
   /** True between a flush and the arrival of its transcription (or error). */
   transcribing: boolean
   elapsedMs: number
@@ -104,6 +111,8 @@ export interface SessionState {
   preferredLanguage: string
   setNativeLanguage: (code: string) => void
   setPreferredLanguage: (code: string) => void
+  /** Removes one sentence bubble from the transcript panel. */
+  deleteTranscript: (id: string) => void
   toggleRecording: () => void
   dismissError: () => void
 }
@@ -114,6 +123,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [recording, setRecording] = useState(false)
   const [startingRecording, setStartingRecording] = useState(false)
+  const [finishing, setFinishing] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [elapsedMs, setElapsedMs] = useState(0)
   const [micLevel, setMicLevel] = useState(0)
@@ -129,6 +139,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
   const clientRef = useRef<TranslatorWsClient | null>(null)
   const captureRef = useRef<CaptureHandle | null>(null)
   const recordingRef = useRef(false)
+  const finishingRef = useRef(false)
   const endpointRef = useRef<EndpointState>(freshEndpointState())
   const configRef = useRef<HelloConfig>({
     native_language: nativeLanguage,
@@ -141,9 +152,11 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     audio: AUDIO_FORMAT,
   }
 
-  const stopRecording = useCallback(async () => {
+  const finalizeRecording = useCallback(async () => {
     recordingRef.current = false
+    finishingRef.current = false
     setRecording(false)
+    setFinishing(false)
     setMicLevel(0)
     const handle = captureRef.current
     captureRef.current = null
@@ -159,6 +172,17 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     }
     endpointRef.current = freshEndpointState()
   }, [])
+
+  const stopRecording = useCallback(async () => {
+    if (finishingRef.current) return // tail window already running — ignore re-taps
+    finishingRef.current = true
+    setFinishing(true)
+    // Tail-capture window (KI-008): keep streaming ~0.7 s of real silence so
+    // the last word is never hard-cut against the buffer edge. Capture keeps
+    // running (chunks + endpointing stay live) until finalize stops it.
+    await new Promise((resolve) => setTimeout(resolve, TAIL_CAPTURE_MS))
+    await finalizeRecording()
+  }, [finalizeRecording])
 
   const handleEvent = useCallback(
     (event: ServerEvent) => {
@@ -213,20 +237,20 @@ export function useTranslatorSession(wsUrl: string): SessionState {
   }, [wsUrl, handleEvent])
 
   // If the connection drops while recording or awaiting a transcription,
-  // stop the capture immediately.
+  // stop the capture immediately (no tail window — the socket is gone).
   useEffect(() => {
     if (
       (wsStatus === 'reconnecting' || wsStatus === 'closed' || wsStatus === 'error') &&
       (recordingRef.current || transcribing)
     ) {
-      if (recordingRef.current) void stopRecording()
+      if (recordingRef.current) void finalizeRecording()
       setTranscribing(false)
       setError({
         code: 'connection_lost',
         message: 'Connection lost — recording stopped. Speak again once reconnected.',
       })
     }
-  }, [wsStatus, stopRecording, transcribing])
+  }, [wsStatus, finalizeRecording, transcribing])
 
   // Elapsed timer while recording.
   useEffect(() => {
@@ -294,7 +318,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
   }, [])
 
   const toggleRecording = useCallback(() => {
-    if (recordingRef.current) void stopRecording()
+    if (recordingRef.current || finishingRef.current) void stopRecording()
     else void startRecording()
   }, [startRecording, stopRecording])
 
@@ -310,12 +334,17 @@ export function useTranslatorSession(wsUrl: string): SessionState {
 
   const dismissError = useCallback(() => setError(null), [])
 
+  const deleteTranscript = useCallback((id: string) => {
+    setTranscripts((prev) => prev.filter((entry) => entry.id !== id))
+  }, [])
+
   return {
     wsStatus,
     sttInfo,
     sessionId,
     recording,
     startingRecording,
+    finishing,
     transcribing,
     elapsedMs,
     micLevel,
@@ -325,6 +354,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     preferredLanguage,
     setNativeLanguage,
     setPreferredLanguage,
+    deleteTranscript,
     toggleRecording,
     dismissError,
   }

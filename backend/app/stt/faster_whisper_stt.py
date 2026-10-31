@@ -29,6 +29,10 @@ Accuracy handling (ADR-0007 — "right language, wrong content" fix):
 - Silero VAD filter (`vad_filter=True`): non-speech regions are trimmed
   BEFORE decoding, so room noise never gets decoded into invented words and
   the decoder spends its budget on actual speech (also faster).
+- Edge padding (`EDGE_PAD_S`): both ends of the utterance get 250 ms of
+  silence before decoding, because the client may flush an utterance that
+  ends hard on the final word (stop tapped immediately after speaking) —
+  a hard-cut word invites decoder derailment (KI-008 / ADR-0008).
 
 The model is loaded lazily (first `ensure_loaded()` call, thread-safe) so the
 event loop never blocks on downloads or model initialization.
@@ -62,6 +66,13 @@ AVG_LOGPROB_THRESHOLD = -1.0
 # buffers are rejected before the model is ever invoked.
 DEAD_AUDIO_PEAK_THRESHOLD = 1e-4
 
+# Edge padding (KI-008): the client can flush an utterance that ends HARD on
+# the final word (user taps stop the instant they finish speaking). A word
+# cut at the buffer edge is acoustically ambiguous and Whisper derails on it
+# — padding both edges with a little real silence lets the decoder settle.
+# Costs nothing (zeros) and is applied after the dead-audio gate.
+EDGE_PAD_S = 0.25
+
 
 class FasterWhisperSTT(STTProvider):
     name = "faster-whisper"
@@ -76,7 +87,7 @@ class FasterWhisperSTT(STTProvider):
         beam_size: int = 5,
         vad_filter: bool = True,
         vad_min_silence_ms: int = 500,
-        vad_speech_pad_ms: int = 150,
+        vad_speech_pad_ms: int = 250,
     ) -> None:
         super().__init__(
             model_id=model_id, device=device, low_confidence_threshold=low_confidence_threshold
@@ -156,6 +167,11 @@ class FasterWhisperSTT(STTProvider):
                 language_probability=1.0 if forced_language else 0.0,
                 audio_duration_s=duration_s,
             )
+
+        # Edge padding (KI-008) — after the gate, before decoding. duration_s
+        # still reports the real utterance length, not the padding.
+        pad = np.zeros(int(EDGE_PAD_S * 16_000), dtype=np.float32)
+        audio = np.concatenate([pad, audio, pad])
 
         try:
             text, language, probability = self._run_transcribe(

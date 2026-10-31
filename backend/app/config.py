@@ -35,7 +35,7 @@ class Settings(BaseSettings):
     stt_beam_size: int = 5
     stt_vad_filter: bool = True
     stt_vad_min_silence_ms: int = 500
-    stt_vad_speech_pad_ms: int = 150
+    stt_vad_speech_pad_ms: int = 250
 
     # --- Audio protocol limits ---
     audio_sample_rate: int = 16_000

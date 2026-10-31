@@ -128,6 +128,35 @@ Format: description / reproduction / root cause / fix / verification / status.
   confirmed in Phase 6 (KI-004); `STT_MODEL`/`STT_BEAM_SIZE`/
   `STT_VAD_FILTER` allow dialing accuracy vs latency.
 
+## KI-008 — RESOLVED: tapping stop immediately after speaking produces garbage; waiting 2–3 s is fine (user report)
+
+- **Description (user report, 2026-10-31):** stopping the recording 2–3 s
+  after finishing speech transcribes 70–90 % correctly, but stopping
+  immediately writes "completely wrong things — something entirely different
+  from what I actually said."
+- **Reproduction (pre-fix):** record an utterance and tap stop the instant
+  the last word ends → the buffer hard-cuts the final word (the worklet's
+  pending partial chunk is dropped, no trailing silence) → Whisper derails
+  on the truncated tail. Tapping stop after 2–3 s hides the bug because the
+  client endpointer (ADR-0007) already flushed the sentence at a natural
+  pause with clean boundaries.
+- **Root cause:** asymmetric flush quality — pause-closed sentences get real
+  trailing silence; stop-tapped ones do not. A word cut at the buffer edge is
+  acoustically ambiguous and the decoder resolves it into wrong content.
+- **Fix (ADR-0008):** (a) 700 ms tail-capture window on stop — the mic stays
+  open and streams real trailing silence (UI: "Finishing… capturing the last
+  words"; re-taps ignored; connection loss finalizes immediately);
+  (b) server-side `EDGE_PAD_S = 250` ms silence padding at both utterance
+  edges before decode (after the dead-audio gate); (c) VAD `speech_pad_ms`
+  150 → 250. Same root-cause family as KI-007; users also received a
+  per-line ✕ delete button for the transcript list (ADR-0008 §4).
+- **Verification:** backend suite green (edge padding covered by the
+  dead-silence gate ordering; real-model ur/en/es assertions unchanged);
+  frontend typecheck/lint/23 tests/build clean; live E2E re-run after
+  restart (docs/testing.md §4–6). Real-device confirmation of the tail
+  window remains Phase 6 (KI-004).
+- **Status:** RESOLVED (2026-10-31).
+
 ## KI-005 — RESOLVED: initial TTS fixtures unusable for ur/es
 
 - **Description:** the sandbox's default TTS voices (Chinese-oriented)

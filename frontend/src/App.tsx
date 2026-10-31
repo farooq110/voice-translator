@@ -31,13 +31,15 @@ export default function App() {
   const preferred = getLanguage(session.preferredLanguage)
   const micDisabled = session.wsStatus !== 'connected'
 
-  const statusLine = session.recording
-    ? `Listening… ${session.elapsedMs >= 1000 ? `${Math.floor(session.elapsedMs / 1000)} s` : 'just started'}`
-    : session.transcribing
-      ? 'Transcribing…'
-      : session.startingRecording
-        ? 'Starting microphone…'
-        : STATUS_HINTS[session.wsStatus]
+  const statusLine = session.finishing
+    ? 'Finishing… capturing the last words'
+    : session.recording
+      ? `Listening… ${session.elapsedMs >= 1000 ? `${Math.floor(session.elapsedMs / 1000)} s` : 'just started'}`
+      : session.transcribing
+        ? 'Transcribing…'
+        : session.startingRecording
+          ? 'Starting microphone…'
+          : STATUS_HINTS[session.wsStatus]
 
   return (
     <div className="app">
@@ -84,6 +86,7 @@ export default function App() {
               recording={session.recording}
               starting={session.startingRecording}
               busy={session.transcribing}
+              finishing={session.finishing}
               disabled={micDisabled}
               onToggle={session.toggleRecording}
             />
@@ -94,7 +97,7 @@ export default function App() {
           </p>
         </section>
 
-        <TranscriptPanel entries={session.transcripts} />
+        <TranscriptPanel entries={session.transcripts} onDelete={session.deleteTranscript} />
 
         {session.sttInfo !== null ? (
           <p className="app__engine">
