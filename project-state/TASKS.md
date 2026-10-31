@@ -68,7 +68,7 @@ A task may only be marked `DONE` after implementation **and** verification.
 | GIT-03 | Working-tree normalization — 14 files with accidental +x mode bits (content unchanged, 0 insertions/deletions) reverted to 644 | DONE |
 | GIT-04 | `origin` remote → `https://github.com/farooq110/voice-translator.git`; branch `phase-2` created from `main` | DONE |
 | GIT-05 | Recreate `download/Phase-One.zip` (sandbox wiped `download/` again): Phase-1-final tree @ tag `phase-one-final` + git-history bundle + MANIFEST, integrity verified | DONE |
-| GIT-06 | Push `phase-2` to origin — sandbox has no GitHub credentials (no PAT / SSH binary / credential helper); everything is push-ready, awaiting the user's token | PENDING |
+| GIT-06 | Push to origin — authenticated via the user-provided SSH key (ed25519, fingerprint `SHA256:2lsCE9…`) through a paramiko `core.sshCommand` shim (sandbox has no ssh binary; GitHub's published host-key fingerprints pinned; remote URL switched to `git@github.com:farooq110/voice-translator.git`). Remote `main` (web-UI bootstrap: one-commit README "# voice-translator") superseded by force-push; `main` + `phase-2` both pushed | DONE |
 
 ## Phase 3+ — see `prompt.md` section 17
 

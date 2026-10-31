@@ -17,8 +17,12 @@ per the user's Repository Details, pre-publish history alignment to
 `m Farooq <khanbhi88@gmail.com>` (11 commits, repo never pushed),
 working-tree mode-bit normalization, `origin` remote configured,
 `phase-2` branch created, `download/Phase-One.zip` recreated (tag
-`phase-one-final`). The push of `phase-2` awaits the user's GitHub
-credentials — the sandbox has no PAT / SSH / credential helper.
+`phase-one-final`). The push then completed via the user-provided SSH key
+(ed25519, fingerprint `SHA256:2lsCE9…`) through a paramiko
+`core.sshCommand` shim — the sandbox has no ssh binary and GitHub's
+published host-key fingerprints are pinned. Remote `main` (the web-UI
+bootstrap README commit) was superseded; `main` and `phase-2` are both
+on github.com/farooq110/voice-translator.
 
 The KI-009 round before it: client endpointing v2 (4.5 s soft cap +
 300 ms micro-pause, hard cap 20 s → 9 s), pending-decode Transcribing
@@ -81,6 +85,10 @@ updated.
   `m Farooq <khanbhi88@gmail.com>`; working tree clean; tag
   `phase-one-final` → `3c1b5c2`; `ls-remote` confirms the GitHub repo is
   reachable and empty (ready for the first push).
+- Push: SSH auth via the user-provided key (fingerprint `SHA256:2lsCE9…`)
+  with a paramiko shim (`core.sshCommand`); GitHub host-key fingerprints
+  pinned (ED25519/ECDSA/RSA); `git ls-remote origin` shows `refs/heads/main`
+  and `refs/heads/phase-2`; the web-UI bootstrap README commit superseded.
 - Note: `scripts/smoke_phase2.mjs` (browser smoke) was never committed and is
   lost with the `download/` wipe — must be re-provisioned before the next
   browser-smoke round (docs/testing.md §7).
