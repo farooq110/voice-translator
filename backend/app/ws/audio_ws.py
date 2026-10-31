@@ -13,6 +13,12 @@ Invariants enforced here:
 - format must be pcm_s16le / 16 kHz / mono;
 - buffers are bounded — at `max_utterance_seconds` an auto-flush is issued;
 - STT runs on a bounded worker executor, never on the event loop;
+- a server-side Silero VAD pipeline (Phase 2, ADR-0009) gates, trims and
+  segments every utterance BEFORE decoding: silence/noise is answered
+  `no_speech_detected` without touching the model (STT is never invoked);
+- admission control bounds decode work globally and per session — overflow
+  is answered with a non-fatal `server_busy` error (backpressure), never
+  queued without limit;
 - STT is pinned to the hello config's `native_language` (KI-006: the user's
   selection is authoritative; auto-detect mislabels short utterances);
 - hallucination-only results (empty after the no-speech filter) are reported
@@ -37,7 +43,8 @@ from ..audio.validation import (
     ChunkTooLargeError,
     validate_pcm16_chunk,
 )
-from ..config import Settings, get_settings
+from ..audio.vad import UtterancePlan, UtterancePlanner
+from ..config import Settings
 from ..models.protocol import (
     PROTOCOL_VERSION,
     ErrorEvent,
@@ -52,6 +59,7 @@ from ..models.protocol import (
 )
 from ..sessions.manager import Session, SessionManager
 from ..stt.base import STTProvider, TranscriptionResult
+from .backpressure import SttQueue
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -73,12 +81,16 @@ class _Connection:
         session: Session,
         stt: STTProvider,
         executor: ThreadPoolExecutor,
+        vad: UtterancePlanner,
+        stt_queue: SttQueue,
     ) -> None:
         self.websocket = websocket
         self.settings = settings
         self.session = session
         self.stt = stt
         self.executor = executor
+        self.vad = vad
+        self.stt_queue = stt_queue
         self.hello_done = False
         self.closed = False
         self._send_lock = asyncio.Lock()
@@ -224,6 +236,32 @@ class _Connection:
                 "No speech captured since the last transcription.",
             )
             return
+
+        # Backpressure (Phase 2): bound in-flight decodes per session, then
+        # globally. Overflow is a non-fatal `server_busy` — the client keeps
+        # the connection and simply re-flushes later; nothing is queued
+        # without limit.
+        if len(self._pending) >= self.settings.stt_max_pending_per_session:
+            logger.info(
+                "ws.busy session_id=%s reason=pending_session pending=%d",
+                self.session.id, len(self._pending),
+            )
+            await self.send_error(
+                "server_busy",
+                "Still transcribing previous speech — one moment, then try again.",
+            )
+            return
+        if not self.stt_queue.try_acquire():
+            logger.info(
+                "ws.busy session_id=%s reason=queue_full queued=%d",
+                self.session.id, self.stt_queue.queued,
+            )
+            await self.send_error(
+                "server_busy",
+                "Server is busy transcribing other audio — try again in a moment.",
+            )
+            return
+
         self.session.utterances += 1
         utterance_id = f"u_{self.session.utterances:04d}_{uuid.uuid4().hex[:6]}"
         task = asyncio.create_task(self._transcribe_and_deliver(audio, utterance_id))
@@ -249,16 +287,30 @@ class _Connection:
         started = time.perf_counter()
         hint = self._language_hint()
         try:
-            result: TranscriptionResult = await asyncio.wait_for(
+            # Phase 2 VAD pipeline (gate → trim → split), CPU work off-loop.
+            plan = await asyncio.wait_for(
                 loop.run_in_executor(
                     self.executor,
-                    lambda: self.stt.transcribe_pcm(
-                        audio,
-                        sample_rate=self.settings.audio_sample_rate,
-                        language_hint=hint,
-                    ),
+                    lambda: self.vad.plan(audio, sample_rate=self.settings.audio_sample_rate),
                 ),
                 timeout=self.settings.stt_timeout_seconds,
+            )
+            if not plan.chunks:
+                processing_ms = int((time.perf_counter() - started) * 1000)
+                logger.info(
+                    "ws.vad_gate_rejected session_id=%s id=%s duration_s=%.2f speech_s=%.2f processing_ms=%d",
+                    self.session.id, utterance_id, plan.source_duration_s, plan.speech_s, processing_ms,
+                )
+                await self.send_error(
+                    "no_speech_detected",
+                    "No speech was captured in that utterance — try again, a little "
+                    "closer to the microphone.",
+                )
+                return
+
+            result: TranscriptionResult = await asyncio.wait_for(
+                self._decode_plan(plan, hint),
+                timeout=self.settings.stt_timeout_seconds * len(plan.chunks),
             )
         except asyncio.TimeoutError:
             await self.send_error(
@@ -269,6 +321,9 @@ class _Connection:
             logger.exception("stt failed session_id=%s", self.session.id)
             await self.send_error("stt_error", "Speech recognition failed.")
             return
+        finally:
+            # Exactly one release per acquired slot (acquired in flush_buffer).
+            self.stt_queue.release()
 
         if self.closed or self.session.closed:
             logger.debug("ws.stale_result session_id=%s utterance=%s dropped", self.session.id, utterance_id)
@@ -291,6 +346,20 @@ class _Connection:
             )
             return
 
+        # Report the duration the user actually spoke (pre-trim), not the
+        # trimmed decode input.
+        result = TranscriptionResult(
+            text=result.text,
+            language=result.language,
+            language_probability=result.language_probability,
+            audio_duration_s=plan.source_duration_s,
+        )
+        if plan.split:
+            logger.info(
+                "ws.segmented session_id=%s id=%s chunks=%d dropped_s=%.2f",
+                self.session.id, utterance_id, len(plan.chunks), plan.dropped_s,
+            )
+
         event = TranscriptionEvent(
             id=utterance_id,
             text=result.text,
@@ -308,13 +377,48 @@ class _Connection:
         logger.debug("ws.transcript session_id=%s text=%r", self.session.id, event.text)
         await self._send(event)
 
+    async def _decode_plan(
+        self, plan: UtterancePlan, hint: str | None
+    ) -> TranscriptionResult:
+        """Decode one planned utterance — one call for a single chunk, one
+        per segment for a split utterance (texts joined in order)."""
+        loop = asyncio.get_running_loop()
+
+        def decode(chunk: bytes) -> TranscriptionResult:
+            return self.stt.transcribe_pcm(
+                chunk,
+                sample_rate=self.settings.audio_sample_rate,
+                language_hint=hint,
+            )
+
+        if len(plan.chunks) == 1:
+            return await loop.run_in_executor(self.executor, decode, plan.chunks[0])
+
+        texts: list[str] = []
+        language = "unknown"
+        probability = 0.0
+        for chunk in plan.chunks:
+            part = await loop.run_in_executor(self.executor, decode, chunk)
+            if part.text.strip():
+                texts.append(part.text.strip())
+                if language == "unknown":
+                    language, probability = part.language, part.language_probability
+        return TranscriptionResult(
+            text=" ".join(texts),
+            language=language,
+            language_probability=probability,
+            audio_duration_s=plan.source_duration_s,
+        )
+
 
 @router.websocket("/ws/audio")
 async def audio_socket(websocket: WebSocket) -> None:
-    settings = get_settings()
+    settings: Settings = websocket.app.state.settings
     stt: STTProvider = websocket.app.state.stt
     sessions: SessionManager = websocket.app.state.sessions
     executor: ThreadPoolExecutor = websocket.app.state.stt_executor
+    vad: UtterancePlanner = websocket.app.state.vad
+    stt_queue: SttQueue = websocket.app.state.stt_queue
 
     await websocket.accept()
     if sessions.active_count() >= settings.max_sessions:
@@ -330,7 +434,13 @@ async def audio_socket(websocket: WebSocket) -> None:
 
     session = sessions.create()
     conn = _Connection(
-        websocket, settings=settings, session=session, stt=stt, executor=executor
+        websocket,
+        settings=settings,
+        session=session,
+        stt=stt,
+        executor=executor,
+        vad=vad,
+        stt_queue=stt_queue,
     )
     logger.info("ws.open session_id=%s", session.id)
 

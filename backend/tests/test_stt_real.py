@@ -135,3 +135,50 @@ def test_urdu_autodetect_label_is_ur(provider: FasterWhisperSTT) -> None:
     pcm, rate, channels = _read_wav(FIXTURES / "ur_greeting.wav")
     result = provider.transcribe_pcm(pcm, sample_rate=rate, channels=channels)
     assert result.language == "ur"
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: full production pipeline — real Silero VAD gate + real Whisper
+# over the real WebSocket endpoint (nothing mocked end to end).
+# ---------------------------------------------------------------------------
+
+HELLO_UR = {
+    "v": 1,
+    "type": "hello",
+    "config": {
+        "native_language": "ur",
+        "preferred_language": "en",
+        "audio": {"encoding": "pcm_s16le", "sample_rate": 16000, "channels": 1},
+    },
+}
+
+
+@pytest.mark.skipif(not _fixtures_present(), reason="audio fixtures not present")
+def test_full_ws_pipeline_real_vad_and_stt() -> None:
+    """Urdu speech streamed over /ws/audio must survive the Phase 2 VAD gate
+    (speech passes, gets trimmed) and be transcribed in Arabic script."""
+    from fastapi.testclient import TestClient
+
+    from app.main import create_app
+
+    pcm, rate, _ = _read_wav(FIXTURES / "ur_greeting.wav")
+    app = create_app()
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/audio") as ws:
+            ws.send_json(HELLO_UR)
+            ready = ws.receive_json()
+            assert ready["type"] == "ready"
+            health = client.get("/health").json()
+            assert health["vad"]["enabled"] is True
+            assert health["vad"]["provider"] == "silero-vad"
+            chunk = int(rate * 0.1) * 2  # 100 ms chunks, like the frontend
+            for i in range(0, len(pcm), chunk):
+                ws.send_bytes(pcm[i : i + chunk])
+            ws.send_json({"v": 1, "type": "flush"})
+            event = ws.receive_json()
+            assert event["type"] == "transcription", f"unexpected: {event}"
+            assert event["language"] == "ur"
+            assert event["audio_duration_s"] == pytest.approx(len(pcm) / 2 / rate, abs=0.05)
+            ratio = _arabic_script_ratio(event["text"])
+            assert ratio >= 0.8, f"Arabic script expected, got {event['text']!r}"
+            print(f"\nws pipeline ur: {event['text']!r} proc_ms={event['processing_ms']}")

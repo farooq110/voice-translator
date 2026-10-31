@@ -4,19 +4,21 @@ Format: description / reproduction / root cause / fix / verification / status.
 
 ---
 
-## KI-001 — No server-side VAD yet (by design, Phase 2 scope)
+## KI-001 — RESOLVED: server-side VAD + hands-free mode (was "by design, Phase 2 scope")
 
-- **Description:** Phase 1 uses manual push-to-talk. Silence while the mic is
-  open is buffered (bounded at 30 s → auto-flush).
-- **Reproduction:** open mic, stay quiet 30 s → a `nothing_to_transcribe`-free
-  empty/silence transcription attempt occurs at the cap.
-- **Root cause:** VAD is explicitly a Phase 2 deliverable (master prompt §17).
-- **Fix:** planned Phase 2 (Silero VAD / energy-based segmentation + hands-free mode).
-  Partially arrived early via ADR-0007: the frontend hook now energy-gates
-  pauses while the mic is open and flushes per sentence (client-side only —
-  the server-side VAD for hands-free mode remains Phase 2 scope).
-- **Verification:** pending Phase 2 measurements (before/after latency + accuracy).
-- **Status:** OPEN (planned scope, not a defect).
+- **Description:** Phase 1 used manual push-to-talk; silence while the mic
+  was open was buffered (bounded at 30 s → auto-flush) and decoded.
+- **Resolution (Phase 2, ADR-0009):** server-side Silero VAD (bundled with
+  faster-whisper, no new dependency) now gates every flush — silence/noise
+  answered `no_speech_detected` in ~13 ms WITHOUT invoking STT (tested: 0
+  provider calls) —, trims utterances to their speech region, and splits
+  over-long speech at natural pauses. Hands-free continuous capture shipped
+  behind `VITE_FEATURE_HANDS_FREE` with silence-drain suppression.
+- **Verification:** backend 65 passed + 1 xfail (9 planner, 5 real-Silero,
+  7 WS/backpressure tests); live E2E 3/3 PASS through the pipeline; silence
+  guard PASS; browser smoke 10/10; benchmarks in docs/testing.md §5a.
+- **Status:** RESOLVED (2026-10-31). Real-noise threshold tuning remains a
+  Phase 6 input (KI-004).
 
 ## KI-002 — Whisper labels short Urdu utterances as Hindi (`hi`) — ur/hi confusion (AUTO-DETECT path only)
 
@@ -63,6 +65,10 @@ Format: description / reproduction / root cause / fix / verification / status.
 - **Reproduction:** n/a — cannot be tested in the sandbox (no real devices).
 - **Root cause:** Phase 6 scope.
 - **Fix:** Phase 6 test matrix (Android Chrome, desktop Chrome, iOS Safari).
+  Phase 2 delivered the closest sandbox proxy (headless Chromium with Chrome's
+  fake microphone, 10/10 smoke checks — docs/testing.md §7) and a 5-minute
+  manual desktop-Chrome checklist for the human-side verification
+  (docs/testing.md §8).
 - **Status:** OPEN (planned Phase 6).
 
 ## KI-006 — RESOLVED: wrong language/script/digits in transcripts + 2–3 s latency (user report)

@@ -2,6 +2,77 @@
 
 All meaningful project changes. Format based on Keep a Changelog.
 
+## [0.2.0] — Phase 2 — Voice Activity Detection and Audio Optimization (2026-10-31)
+
+### Added
+- **Server-side Silero VAD pipeline** (`backend/app/audio/vad.py`, ADR-0009):
+  every flush is gated (silence/noise → `no_speech_detected` in ~13 ms
+  WITHOUT calling the STT — asserted 0 provider calls), edge-trimmed to its
+  speech region (±200 ms; `audio_duration_s` still reports what the user
+  spoke), and over-long speech spans (24 s) or pauses ≥ 700 ms segment the
+  utterance into bounded decodes with texts joined in order. The Silero v6
+  ONNX ships inside faster-whisper's assets — no new dependency.
+- **Bounded STT admission / backpressure** (`backend/app/ws/backpressure.py`):
+  global cap 16 + per-session cap 4 on utterances in flight; overflow answers
+  a non-fatal `server_busy` (documented in the protocol spec) instead of
+  queueing without bound; slot release is exception/timeout-safe
+  (regression-tested).
+- **Hands-free continuous mode** behind `VITE_FEATURE_HANDS_FREE` (default
+  ON): toggle in the capture panel, persisted (`vt.hands_free`), status line
+  "Hands-free listening…". Silence-only drains (20 s idle cap) no longer
+  spam `no_speech_detected` banners (`noSpeechPolicy.ts`, unit-tested);
+  endpointing/tail-capture stay on in both modes (they fixed KI-007/008).
+- **Client uplink backpressure**: audio chunks are dropped while the socket
+  send buffer exceeds 1 MiB (counted in `droppedChunkCount`); control JSON
+  always passes.
+- `/health` now reports `vad` (provider/enabled/loaded) and `stt_queue`
+  (queued/max). New env vars: `VAD_GATE_ENABLED`, `VAD_THRESHOLD`,
+  `VAD_MIN_SPEECH_MS`, `VAD_TRIM_PAD_MS`, `VAD_SPLIT_SILENCE_MS`,
+  `VAD_SPLIT_MAX_SECONDS`, `STT_MAX_QUEUE_DEPTH`,
+  `STT_MAX_PENDING_PER_SESSION`.
+- `scripts/bench_vad.py` (gate cost, silence rejection, trim/accuracy) and
+  `scripts/smoke_phase2.mjs` (headless browser smoke with Chrome's fake
+  microphone; screenshots in `download/phase2-screens/`).
+
+### Fixed
+- The WS endpoint read the cached global `get_settings()` instead of the
+  injected app settings — per-app overrides silently ignored (found by the
+  new backpressure tests); it now reads `app.state.settings`.
+
+### Verification
+- Backend **65 passed + 1 documented xfail** (new: 9 VAD-planner, 5 real-Silero,
+  7 WS/backpressure, 1 full-pipeline real-model test); frontend typecheck/
+  lint clean, **33 tests** (+10), build ok.
+- Live E2E 3/3 PASS (en/es/ur through the VAD pipeline), silence guard PASS,
+  browser smoke **10/10** with the fake microphone.
+- `bench_vad.py`: gate 10–13 ms; trim accuracy-neutral (identical Urdu text);
+  peak RSS 1250 MiB (bench) / 1233 MiB resident (server, +170 MiB for Silero).
+- Docs: ADR-0009, protocol spec (`server_busy`, VAD semantics, client
+  obligations), architecture/testing/deployment/README, KI-001 → RESOLVED,
+  TASKS/CURRENT_STATE/DECISIONS updated.
+
+## [0.1.2] — Phase 1 bugfix rounds — KI-007 + KI-008 (2026-10-31)
+
+User-reported: "language correct but content wrong/drifting"; then "tapping
+stop immediately after speaking writes completely wrong things".
+
+### Fixed (KI-007, ADR-0007)
+- Model default `base` → `small` (measured: `base` garbles the ur fixture and
+  drifts mid-sentence; `small` produces the correct text at RTF ≈ 0.32).
+- Greedy `beam_size=1` → beam search `beam_size=5` with Whisper's
+  quality-gated temperature ladder (recovers mid-sentence derailments).
+- Decode-time Silero VAD (`vad_filter=True`, 500 ms min silence, 150→250 ms
+  pad) trims non-speech before decode.
+- Client-side sentence endpointing in the frontend hook: a ≥ 800 ms pause
+  after ≥ 1.2 s of buffered audio flushes the sentence while the mic stays
+  open (20 s hard cap) — results appear live, buffers are sentence-sized.
+
+### Fixed (KI-008, ADR-0008)
+- 700 ms tail-capture window on stop (UI: "Finishing… capturing the last
+  words"; re-taps ignored; connection loss finalizes immediately).
+- Server-side 250 ms edge padding before decode; VAD `speech_pad_ms` 150→250.
+- Per-line ✕ delete button in the transcript list.
+
 ## [0.1.1] — Phase 1 bugfix round — KI-006 (2026-10-31)
 
 User-reported: Urdu selected but transcripts appeared in Hindi/Persian-style

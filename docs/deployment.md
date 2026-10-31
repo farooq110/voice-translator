@@ -56,9 +56,17 @@ All in `backend/.env.example`; highlights:
 | `STT_MODEL` | `small` | Whisper size |
 | `STT_DEVICE` / `STT_COMPUTE_TYPE` | `cpu` / `int8` | CTranslate2 runtime |
 | `STT_BEAM_SIZE` | `5` | beam width (ADR-0007 accuracy) |
-| `STT_VAD_FILTER` | `true` | Silero VAD trims non-speech before decode |
+| `STT_VAD_FILTER` | `true` | Silero VAD trims non-speech inside decode |
 | `STT_WORKER_THREADS` | `1` | inference executor size |
 | `STT_TIMEOUT_SECONDS` | `30` | per-utterance inference cap |
+| `VAD_GATE_ENABLED` | `true` | **Phase 2 (ADR-0009)** server-side Silero gate before STT |
+| `VAD_THRESHOLD` | `0.5` | Silero speech probability threshold |
+| `VAD_MIN_SPEECH_MS` | `120` | shorter speech = noise → gated |
+| `VAD_TRIM_PAD_MS` | `200` | audio kept around the speech region when trimming |
+| `VAD_SPLIT_SILENCE_MS` | `700` | pause length that may split an utterance |
+| `VAD_SPLIT_MAX_SECONDS` | `24` | speech span that forces a split (bounds a decode call) |
+| `STT_MAX_QUEUE_DEPTH` | `16` | global decode admission cap → `server_busy` backpressure |
+| `STT_MAX_PENDING_PER_SESSION` | `4` | per-session decode cap → `server_busy` backpressure |
 | `MAX_CHUNK_BYTES` | `262144` | per-frame cap |
 | `MAX_UTTERANCE_SECONDS` | `30` | buffer cap → auto-flush |
 | `WS_IDLE_TIMEOUT_SECONDS` | `180` | zombie-connection reap |
@@ -67,18 +75,23 @@ All in `backend/.env.example`; highlights:
 | `HF_HOME` | *(set by start.sh)* | keeps model cache inside the project |
 | `HF_ENDPOINT` | *(unset)* | mirror for filtered networks |
 
-## 6. Security posture (Phase 1 status — honest)
+Frontend build-time flag: `VITE_FEATURE_HANDS_FREE` (default `true`) — set
+`false` to remove the hands-free toggle from the built SPA (ADR-0009).
+
+## 6. Security posture (Phase 2 status — honest)
 
 Implemented: same-origin-only serving, no secrets in the frontend, audio
-format/payload validation, bounded buffers/queues, session caps + cleanup,
-idle timeouts, privacy-conscious logging (no transcript text above DEBUG,
-audio never persisted).
+format/payload validation, bounded buffers/queues (per-session and global
+decode admission caps with `server_busy` backpressure — ADR-0009), server-side
+VAD gate (silence/noise never decoded), session caps + cleanup, idle
+timeouts, privacy-conscious logging (no transcript text above DEBUG, audio
+never persisted).
 
 Not yet implemented (deliberately later phases): authentication/authorization
-(Phase 10), per-session rate limiting beyond size caps (Phase 10), TLS
-termination (handled by the platform gateway in the sandbox; use a reverse
+(Phase 10), per-session rate limiting beyond the admission caps (Phase 10),
+TLS termination (handled by the platform gateway in the sandbox; use a reverse
 proxy in self-hosted production), provider data-flow documentation beyond
-"audio/text never leaves the box in Phase 1" (true today — STT is local;
+"audio/text never leaves the box in Phase 1/2" (true today — STT is local;
 translation/TTS providers arrive in Phases 3/4 and will be documented then).
 
 **Phase 1 is intended for private/LAN or sandbox deployment, not the public

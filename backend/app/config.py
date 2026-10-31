@@ -37,6 +37,29 @@ class Settings(BaseSettings):
     stt_vad_min_silence_ms: int = 500
     stt_vad_speech_pad_ms: int = 250
 
+    # --- Server-side VAD gate (Phase 2, ADR-0009) ---
+    # Silero VAD (bundled with faster-whisper) runs BEFORE the STT model:
+    # silence/noise is rejected without decoding, utterances are edge-trimmed
+    # to their speech region, and over-long buffers are split at natural
+    # pauses. `vad_gate_enabled=False` restores the Phase 1 pass-through.
+    vad_gate_enabled: bool = True
+    vad_threshold: float = 0.5
+    # Speech shorter than this is treated as noise (clicks, breaths).
+    vad_min_speech_ms: int = 120
+    # Real audio kept around the detected speech region when trimming.
+    vad_trim_pad_ms: int = 200
+    # A pause this long may split an utterance into separate decodes.
+    vad_split_silence_ms: int = 700
+    # Speech span that always forces a split (bounds a single decode call).
+    vad_split_max_seconds: float = 24.0
+
+    # --- STT admission / backpressure (Phase 2) ---
+    # Global cap on utterances admitted for decoding (the executor queue is
+    # unbounded by itself). Overflow answers `server_busy` — backpressure.
+    stt_max_queue_depth: int = 16
+    # Per-session cap on simultaneously decoding utterances.
+    stt_max_pending_per_session: int = 4
+
     # --- Audio protocol limits ---
     audio_sample_rate: int = 16_000
     max_chunk_bytes: int = 262_144

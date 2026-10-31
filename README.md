@@ -6,13 +6,16 @@ Language — the other person installs and configures nothing. The system
 detects what language each side speaks, translates only the configured pair in
 the required direction, and passes every other language through untouched.
 
-> **Status — Phase 1 complete (of 10).** Working today: responsive browser UI
+> **Status — Phase 2 complete (of 10).** Working today: responsive browser UI
 > (mobile-first), microphone capture, real-time streaming to the backend,
 > **local CPU speech recognition (Whisper, no GPU)** with the language pinned
-> to your selection, live transcript with RTL support. Translation, TTS and meeting
+> to your selection, live transcript with RTL support, **server-side Silero
+> voice-activity gate (silence/noise never decoded)**, edge-trimmed and
+> pause-segmented utterances, **hands-free continuous mode**, backpressured
+> bounded queues, per-line transcript delete. Translation, TTS and meeting
 > integrations arrive in the next phases — see the [roadmap](#roadmap).
 
-![desktop](../download/phase1-screens/desktop.png)
+![desktop](../download/phase2-screens/desktop.png)
 
 ## Quick start
 
@@ -31,7 +34,8 @@ cd .. && bash start.sh          # → http://localhost:3000
 
 Open `http://localhost:3000`, pick your languages, tap the microphone, speak,
 tap again → transcription appears in your language (the engine is pinned to
-your selection — ADR-0006).
+your selection — ADR-0006). Keep the mic open with **Hands-free** enabled and
+sentences transcribe themselves at every pause.
 
 Development mode (HMR): `cd backend && uv run uvicorn app.main:app --port 8000`
 plus `cd frontend && npm run dev` (Vite :5173 proxies API/WS).
@@ -45,16 +49,21 @@ getUserMedia → AudioWorklet
   (resample → PCM16, 16 kHz, 100 ms chunks)
         │  WebSocket /ws/audio — protocol v1 (docs/audio-protocol.md)
         ▼
-                     bounded buffer ──flush──▶ ThreadPoolExecutor
-                                               faster-whisper (CPU, int8)
-                                               + language pinned to hello config
+                     bounded buffer ──flush──▶ Silero VAD gate (Phase 2):
+                     reject silence/noise (~13 ms), trim edges, split at pauses
+                                   │ speech only
+                                   ▼
+                     ThreadPoolExecutor (admission-capped → server_busy)
+                     faster-whisper (CPU, int8) + language pinned to hello config
         ◀──────────────── transcription event (text, language, confidence, timings)
 ```
 
 Key properties: strict TypeScript (no `any`), versioned WebSocket protocol,
-bounded buffers/queues (no unbounded memory), STT off the event loop,
-stale-result rejection, auto-reconnect with backoff, privacy-conscious logging
-(transcripts never logged above DEBUG, audio never persisted).
+bounded buffers + admission-capped decode queue with `server_busy`
+backpressure (no unbounded memory anywhere), server-side VAD gate, STT off
+the event loop, stale-result rejection, uplink chunk dropping on stall,
+auto-reconnect with backoff, privacy-conscious logging (transcripts never
+logged above DEBUG, audio never persisted).
 
 ## Project layout
 
@@ -71,41 +80,44 @@ start.sh             single-port production start (platform dev.sh calls this)
 ## Testing
 
 ```bash
-cd backend && uv run pytest                # 42 passed + 1 documented xfail
+cd backend && uv run pytest                # 65 passed + 1 documented xfail
 cd backend && HF_HOME=../models/huggingface uv run pytest -m stt_real   # real-model tests
 cd frontend && npm run typecheck && npm run lint && npm run test
 bash start.sh   # then:
 cd backend && uv run python scripts/e2e_synthetic_check.py --url ws://localhost:3000/ws/audio
 cd backend && uv run python scripts/silence_guard_check.py --url ws://localhost:3000/ws/audio
+node scripts/smoke_phase2.mjs               # headless browser smoke (fake mic)
 ```
 
-**Measured on 2 vCPU (no GPU):** transcription ≈ 0.6 s for a 7 s utterance
-(pinned language, RTF 0.10–0.13; auto-detect mode is 41–45% slower), real
-neural-voice speech verified for English, Spanish and Urdu (language labels
-deterministic, p=1.00). Full numbers and the honesty list (what is *not*
-tested yet): [docs/testing.md](docs/testing.md).
+**Measured on 2 vCPU (no GPU):** VAD gate ≈ 13 ms per flush (silence/noise
+never reaches the model), transcription ≈ 2 s for a 7 s utterance via
+small+beam5 (RTF ≈ 0.3), real neural-voice speech verified for English,
+Spanish and Urdu (language labels deterministic, p=1.00), trim verified
+accuracy-neutral. Full numbers and the honesty list (what is *not* tested
+yet): [docs/testing.md](docs/testing.md).
 
-## Known limitations (Phase 1)
+## Known limitations (Phase 2)
 
-- Push-to-talk only — hands-free continuous mode needs VAD (**Phase 2**).
 - With AUTO-detection (used only in tests / Phase 3 for the other
   participant), Whisper may label short Urdu utterances as Hindi (ur/hi share
   spoken Hindustani). Your own mic is unaffected: the engine is pinned to
   your selected language ([ADR-0006](docs/decisions/0006-stt-native-language-hint.md),
   [KI-002](project-state/KNOWN_ISSUES.md)).
 - No real-device testing yet (Android Chrome / iOS Safari / desktop Chrome —
-  **Phase 6**); background-tab/lock-screen behavior is undocumented until then.
+  **Phase 6**); a 5-minute desktop-Chrome manual checklist is in
+  [docs/testing.md §8](docs/testing.md). Background-tab/lock-screen behavior
+  is undocumented until then.
 - No authentication — intended for private/LAN/sandbox deployment (**Phase 10**).
-- Two-person sessions (second participant) arrive in **Phase 5**; Phase 1 is
-  one mic → transcript.
+- Two-person sessions (second participant) arrive in **Phase 5**; Phases 1–2
+  are one mic → transcript.
 
 ## Roadmap (master prompt §17)
 
 | Phase | Scope | Status |
 | --- | --- | --- |
-| 1 | Foundation + browser STT MVP | **complete — pending approval** |
-| 2 | VAD + audio optimization | not started (needs approval) |
-| 3 | Translation decision engine (bidirectional) | not started |
+| 1 | Foundation + browser STT MVP | **complete** |
+| 2 | VAD + audio optimization | **complete — pending approval** |
+| 3 | Translation decision engine (bidirectional) | not started (needs approval) |
 | 4 | TTS + browser playback | not started |
 | 5 | Complete browser MVP (two participants) | not started |
 | 6 | Mobile/browser compatibility on real devices | not started |

@@ -1,11 +1,13 @@
 import { useMemo } from 'react'
 import { ConnectionBadge } from './components/ConnectionBadge'
 import { ErrorBanner } from './components/ErrorBanner'
+import { HandsFreeToggle } from './components/HandsFreeToggle'
 import { LanguageSelector } from './components/LanguageSelector'
 import { LevelMeter } from './components/LevelMeter'
 import { MicButton } from './components/MicButton'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { getLanguage } from './config/languages'
+import { HANDS_FREE_ENABLED } from './config/flags'
 import { useTranslatorSession } from './hooks/useTranslatorSession'
 import type { WsStatus } from './services/wsClient'
 
@@ -34,7 +36,9 @@ export default function App() {
   const statusLine = session.finishing
     ? 'Finishing… capturing the last words'
     : session.recording
-      ? `Listening… ${session.elapsedMs >= 1000 ? `${Math.floor(session.elapsedMs / 1000)} s` : 'just started'}`
+      ? `${session.handsFree ? 'Hands-free listening' : 'Listening'}… ${
+          session.elapsedMs >= 1000 ? `${Math.floor(session.elapsedMs / 1000)} s` : 'just started'
+        }`
       : session.transcribing
         ? 'Transcribing…'
         : session.startingRecording
@@ -95,6 +99,9 @@ export default function App() {
           <p className={`capture__status${session.recording ? ' capture__status--live' : ''}${session.transcribing ? ' capture__status--busy' : ''}`} role="status">
             {statusLine}
           </p>
+          {HANDS_FREE_ENABLED ? (
+            <HandsFreeToggle checked={session.handsFree} onChange={session.setHandsFree} />
+          ) : null}
         </section>
 
         <TranscriptPanel entries={session.transcripts} onDelete={session.deleteTranscript} />
@@ -109,9 +116,9 @@ export default function App() {
 
       <footer className="app__footer">
         <p>
-          Phase 1 MVP — live transcription only. Translation into your preferred language and
-          spoken output arrive in later phases. Works best in Chrome, Edge and Safari over
-          HTTPS.
+          Phase 2 — live transcription with server-side voice detection. Translation into your
+          preferred language and spoken output arrive in later phases. Works best in Chrome, Edge
+          and Safari over HTTPS.
         </p>
       </footer>
     </div>

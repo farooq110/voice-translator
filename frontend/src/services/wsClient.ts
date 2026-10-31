@@ -44,6 +44,13 @@ const DEFAULT_PONG_TIMEOUT_MS = 10_000
 const DEFAULT_MAX_BACKOFF_MS = 10_000
 const BASE_BACKOFF_MS = 600
 
+/** Backpressure (Phase 2): if the uplink stalls and the socket's send buffer
+ * grows past this, DROP new audio chunks instead of queueing without bound
+ * (~32 s of audio at the 32 kB/s stream rate). Audio loss under genuine
+ * congestion is preferable to unbounded memory growth and ever-staler
+ * transcripts; the heartbeat detects a truly dead connection either way. */
+const MAX_WS_BUFFERED_BYTES = 1_048_576
+
 export class TranslatorWsClient {
   private ws: WebSocket | null = null
   private status: WsStatus = 'idle'
@@ -53,6 +60,7 @@ export class TranslatorWsClient {
   private pingTimer: ReturnType<typeof setTimeout> | null = null
   private pongTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  private droppedChunks = 0
 
   constructor(private readonly options: WsClientOptions) {}
 
@@ -83,9 +91,24 @@ export class TranslatorWsClient {
   // ---------------------------------------------------------------- upload
 
   sendAudioChunk(buffer: ArrayBuffer): boolean {
-    if (!this.isReady() || this.ws === null) return false
-    this.ws.send(buffer)
+    const ws = this.ws
+    if (!this.isReady() || ws === null) return false
+    if (ws.bufferedAmount > MAX_WS_BUFFERED_BYTES) {
+      this.droppedChunks += 1
+      if (this.droppedChunks === 1 || this.droppedChunks % 50 === 0) {
+        console.warn(
+          `[ws] slow uplink (buffered ${ws.bufferedAmount} B) — dropped ${this.droppedChunks} audio chunk(s)`,
+        )
+      }
+      return false
+    }
+    ws.send(buffer)
     return true
+  }
+
+  /** Chunks dropped by the backpressure policy since connect (diagnostics). */
+  get droppedChunkCount(): number {
+    return this.droppedChunks
   }
 
   flush(): void {

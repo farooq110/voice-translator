@@ -153,6 +153,30 @@ describe('TranslatorWsClient', () => {
     expect(types).toContain('flush')
   })
 
+  it('drops audio chunks when the uplink stalls (backpressure)', async () => {
+    const { client } = makeClient()
+    client.connect()
+    const ws = lastSocket()
+    ws.open()
+    await vi.advanceTimersByTimeAsync(0)
+    ws.serverFrame(READY_EVENT)
+
+    // simulate a stalled uplink: the socket's send buffer is past the cap
+    Object.defineProperty(ws, 'bufferedAmount', { value: 1_048_577, configurable: true })
+    const chunk = new ArrayBuffer(32)
+    expect(client.sendAudioChunk(chunk)).toBe(false)
+    expect(client.droppedChunkCount).toBe(1)
+    expect(ws.sent).not.toContain(chunk)
+
+    // a JSON control message (flush) still goes through — only audio drops
+    client.flush()
+    expect(ws.sentJson().map((msg) => (msg as { type?: string }).type)).toContain('flush')
+
+    // buffer drains → chunks flow again
+    Object.defineProperty(ws, 'bufferedAmount', { value: 0, configurable: true })
+    expect(client.sendAudioChunk(chunk)).toBe(true)
+  })
+
   it('pings periodically', async () => {
     const { client } = makeClient()
     client.connect()

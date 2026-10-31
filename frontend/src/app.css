@@ -285,6 +285,40 @@ body {
   font-weight: 600;
 }
 
+/* ---------- hands-free toggle (Phase 2) ---------- */
+
+.handsfree {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin: 12px 0 0;
+  padding: 10px 12px;
+  border: 1px solid var(--accent-soft);
+  border-radius: 10px;
+  background: var(--accent-soft);
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.handsfree input {
+  margin-top: 2px;
+  width: 16px;
+  height: 16px;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+
+.handsfree__text strong {
+  color: var(--text);
+}
+
+@media (max-width: 640px) {
+  .handsfree {
+    font-size: 0.8rem;
+  }
+}
+
 /* ---------- transcript ---------- */
 
 .transcript-panel {

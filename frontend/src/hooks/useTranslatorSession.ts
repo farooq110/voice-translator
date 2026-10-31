@@ -16,6 +16,7 @@ import {
   type CaptureHandle,
 } from '../services/audioCapture'
 import { TranslatorWsClient, type WsStatus } from '../services/wsClient'
+import { surfaceNoSpeechError } from '../services/noSpeechPolicy'
 import type { HelloConfig, ServerEvent, SttInfo } from '../types/protocol'
 
 export interface TranscriptEntry {
@@ -37,6 +38,7 @@ export interface AppError {
 const MAX_TRANSCRIPTS = 50
 const LS_NATIVE = 'vt.native_language'
 const LS_PREFERRED = 'vt.preferred_language'
+const LS_HANDS_FREE = 'vt.hands_free'
 
 // --- Sentence endpointing (client-side energy gate, ADR-0007) ---------------
 //
@@ -93,6 +95,24 @@ function storeLanguage(key: string, code: string): void {
   }
 }
 
+function loadStoredFlag(key: string, fallback: boolean): boolean {
+  try {
+    const value = window.localStorage.getItem(key)
+    if (value === null) return fallback
+    return value === 'true'
+  } catch {
+    return fallback
+  }
+}
+
+function storeFlag(key: string, value: boolean): void {
+  try {
+    window.localStorage.setItem(key, value ? 'true' : 'false')
+  } catch {
+    // ignore — preference simply won't persist
+  }
+}
+
 export interface SessionState {
   wsStatus: WsStatus
   sttInfo: SttInfo | null
@@ -111,6 +131,9 @@ export interface SessionState {
   preferredLanguage: string
   setNativeLanguage: (code: string) => void
   setPreferredLanguage: (code: string) => void
+  /** Hands-free mode (Phase 2): mic stays open, sentences flow at pauses. */
+  handsFree: boolean
+  setHandsFree: (on: boolean) => void
   /** Removes one sentence bubble from the transcript panel. */
   deleteTranscript: (id: string) => void
   toggleRecording: () => void
@@ -135,12 +158,17 @@ export function useTranslatorSession(wsUrl: string): SessionState {
   const [preferredLanguage, setPreferredLanguageState] = useState(() =>
     loadStoredLanguage(LS_PREFERRED, DEFAULT_PREFERRED_LANGUAGE),
   )
+  const [handsFree, setHandsFreeState] = useState(() => loadStoredFlag(LS_HANDS_FREE, true))
 
   const clientRef = useRef<TranslatorWsClient | null>(null)
   const captureRef = useRef<CaptureHandle | null>(null)
   const recordingRef = useRef(false)
   const finishingRef = useRef(false)
   const endpointRef = useRef<EndpointState>(freshEndpointState())
+  /** Whether the most recent flush contained speech — gates the
+   * no_speech_detected banner (silence-drain flushes are expected, see
+   * noSpeechPolicy.ts). */
+  const lastFlushHadSpeechRef = useRef(true)
   const configRef = useRef<HelloConfig>({
     native_language: nativeLanguage,
     preferred_language: preferredLanguage,
@@ -165,10 +193,12 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     // otherwise the server would answer `nothing_to_transcribe` for a
     // pause the endpointing gate already closed.
     if (endpointRef.current.bufferedMs > 0) {
+      lastFlushHadSpeechRef.current = endpointRef.current.speechSeen
       clientRef.current?.flush()
       // The utterance is now on the server — show progress until the result
-      // (or an error) arrives instead of a silent dead wait.
-      setTranscribing(true)
+      // (or an error) arrives instead of a silent dead wait. Silence-only
+      // drains (hands-free idle) never set the indicator.
+      if (endpointRef.current.speechSeen) setTranscribing(true)
     }
     endpointRef.current = freshEndpointState()
   }, [])
@@ -208,7 +238,12 @@ export function useTranslatorSession(wsUrl: string): SessionState {
       }
       if (event.type === 'error') {
         // Includes no_speech_detected / stt_timeout — never leave the
-        // "Transcribing…" indicator stuck on screen.
+        // "Transcribing…" indicator stuck on screen. A no_speech_detected
+        // after a SILENCE-ONLY flush is expected (server VAD gate did its
+        // job on a hands-free idle drain) and stays invisible.
+        if (event.code === 'no_speech_detected' && !surfaceNoSpeechError(lastFlushHadSpeechRef.current)) {
+          return
+        }
         setTranscribing(false)
         setError({ code: event.code, message: event.message })
       }
@@ -294,9 +329,13 @@ export function useTranslatorSession(wsUrl: string): SessionState {
             ep.silentMs >= ENDPOINT_SILENCE_MS
           const capReached = ep.bufferedMs >= ENDPOINT_MAX_SEGMENT_MS
           if (pauseClosedSentence || capReached) {
+            // Silence-only drains (cap reached, nobody spoke — hands-free
+            // idle) still flush to bound the server buffer, but must not
+            // show the Transcribing… indicator nor a no_speech banner.
+            lastFlushHadSpeechRef.current = ep.speechSeen
             clientRef.current?.flush()
+            if (ep.speechSeen) setTranscribing(true)
             endpointRef.current = freshEndpointState()
-            setTranscribing(true)
           }
         },
       })
@@ -332,6 +371,11 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     storeLanguage(LS_PREFERRED, code)
   }, [])
 
+  const setHandsFree = useCallback((on: boolean) => {
+    setHandsFreeState(on)
+    storeFlag(LS_HANDS_FREE, on)
+  }, [])
+
   const dismissError = useCallback(() => setError(null), [])
 
   const deleteTranscript = useCallback((id: string) => {
@@ -354,6 +398,8 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     preferredLanguage,
     setNativeLanguage,
     setPreferredLanguage,
+    handsFree,
+    setHandsFree,
     deleteTranscript,
     toggleRecording,
     dismissError,

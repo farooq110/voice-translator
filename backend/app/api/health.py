@@ -40,4 +40,10 @@ async def health(request: Request) -> dict[str, object]:
         payload["sessions"] = sessions.stats()
     if stt is not None:
         payload["stt"] = stt.describe()
+    vad = getattr(state, "vad", None)
+    if vad is not None:
+        payload["vad"] = vad.describe()
+    stt_queue = getattr(state, "stt_queue", None)
+    if stt_queue is not None:
+        payload["stt_queue"] = stt_queue.stats()
     return payload
