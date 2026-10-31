@@ -48,6 +48,17 @@ A task may only be marked `DONE` after implementation **and** verification.
 - Docs: ADR-0009; protocol spec updated (server_busy, VAD semantics);
   architecture/deployment/README updated; KI-001 RESOLVED.
 
+## Phase 2 defect round 2 — KI-009 (user report, 2026-11-01) — COMPLETE
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P2-R2-01 | Continuous-speech latency (ADR-0010): client endpointing v2 — soft cap 4.5 s + 300 ms micro-pause, hard cap 20 s → 9 s; pending-decode counter keeps the Transcribing… indicator honest while flushes overlap | DONE |
+| P2-R2-02 | Transcript panel newest-first (user request); scroll-to-bottom removed; per-line ✕ delete unaffected | DONE |
+| P2-R2-03 | `scripts/e2e_continuous_speech_check.py` — live old-vs-new benchmark on 22.5 s compressed-silence ur speech; old baseline reproduced (first text 22.2 s), new PASS (5/5 utterances, first text 6.6 s, flush→text 1.9–2.2 s) | DONE |
+| P2-R2-04 | Re-verification: backend 65 passed + 1 xfail; frontend tsc/lint/33 tests/build clean; live E2E 3/3 PASS; silence guard PASS; built bundle carries ADR-0010 constants | DONE |
+| P2-R2-05 | Docs: ADR-0010; testing.md §1/§2/§3/§5b/§6/§7/§9; KI-009 RESOLVED; CHANGELOG 0.2.1; DECISIONS D-012; CURRENT_STATE; APP_VERSION 0.2.1 | DONE |
+| P2-R2-06 | Recreate lost `download/Phase-One.zip` (sandbox wiped `download/` between sessions): Phase-1-final tree @ `ead3fb1` + git-history bundle + MANIFEST, integrity verified | DONE |
+
 ## Phase 3+ — see `prompt.md` section 17
 
 Translation decision engine (P3), TTS + playback (P4), two-person MVP (P5),

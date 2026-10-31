@@ -26,6 +26,10 @@ cd backend && uv run python scripts/e2e_synthetic_check.py --url ws://localhost:
 # Hallucination guard: digital silence must answer no_speech_detected
 cd backend && uv run python scripts/silence_guard_check.py --url ws://localhost:3000/ws/audio
 
+# Continuous-speech latency (KI-009 / ADR-0010): old vs new endpointing on
+# compressed-silence continuous speech (needs the app running)
+cd backend && uv run python scripts/e2e_continuous_speech_check.py --url ws://localhost:3000/ws/audio
+
 # STT benchmark (latency + peak RSS; auto-detect vs pinned language)
 cd backend && HF_HOME=../models/huggingface uv run python scripts/bench_stt.py
 
@@ -36,7 +40,7 @@ cd backend && HF_HOME=../models/huggingface uv run python scripts/bench_vad.py
 node scripts/smoke_phase2.mjs
 ```
 
-## 2. Backend test suite — actual result (2026-10-31, after ADR-0009)
+## 2. Backend test suite — actual result (2026-10-31, after ADR-0009; re-verified 2026-11-01 after ADR-0010 — same counts)
 
 `uv run pytest` → **65 passed, 1 xfailed** in ~7 s (59 unit + 6 real-model).
 
@@ -61,7 +65,7 @@ Settings injectability note (found by the Phase 2 tests): the WS endpoint now
 reads `app.state.settings` — the previously used `get_settings()` (lru_cache)
 bypassed per-app overrides in tests.
 
-## 3. Frontend — actual results (2026-10-31, Phase 2)
+## 3. Frontend — actual results (2026-10-31, Phase 2; re-verified 2026-11-01 after ADR-0010 — same counts)
 
 - `tsc --noEmit` (strict, `noUncheckedIndexedAccess`) → clean.
 - `eslint . --max-warnings 0` → clean.
@@ -174,7 +178,27 @@ Silero **1250 MiB**; running server after the E2E round **1334 MiB peak /
 1233 MiB resident** (pre-Phase-2 server: 1062 MiB — Silero ONNX adds ~170 MiB,
 within the 4.1 GB budget).
 
-## 6. Live E2E — actual result (2026-10-31, after ADR-0009)
+### 5b. Continuous-speech latency benchmark (KI-009 / ADR-0010) — actual results (2026-11-01)
+
+`scripts/e2e_continuous_speech_check.py` — `ur_greeting.wav` with every
+silence run ≥ 250 ms compressed to 200 ms, ×5 (22.5 s of continuous speech
+with only micro-pauses), streamed real-time over the live server while the
+script runs the SAME endpointing state machine as the frontend and reads
+server events concurrently (true end-to-end latencies):
+
+| Variant | flushes | first text at | cadence | flush→text |
+| --- | --- | --- | --- | --- |
+| old (pre-ADR-0010: 800 ms pause / 20 s cap) | 2 | **22.2 s** | one 19.9 s blob + remainder | 2.3 s (after the whole blob) |
+| new (ADR-0010: 4.5 s soft cap + 300 ms micro-pause / 9 s cap) | 5 | **6.6 s** | every ~4.5 s | 1.9–2.2 s |
+
+All 5 new-mode utterances correct Urdu (`ur` p=1.00 — the greeting text).
+The old mode also shows the second cost of the hard-cap blob: the mid-word
+cut at 19.9 s made the remainder decode as a duplicated fragment
+(`کیسے ہیں؟ میں بالکل ٹھیک ہو شکریہ`). Fixture sanity gate: the old machine
+produced ≤ 2 flushes — the fixture genuinely contains no ≥ 800 ms pause,
+so it isolates exactly the KI-009 complaint.
+
+## 6. Live E2E — actual result (2026-10-31, after ADR-0009; re-run 2026-11-01 after ADR-0010: 3/3 PASS)
 
 `scripts/e2e_synthetic_check.py` against `bash start.sh` (single-port :3000).
 Each fixture streams on its own connection with `native_language` set to the
@@ -211,6 +235,11 @@ PASS: server reported no_speech_detected (hallucination guard active)
 transcription.)
 
 ## 7. Browser smoke test — actual result (2026-10-31, Phase 2)
+
+> Note (2026-11-01): `scripts/smoke_phase2.mjs` was never committed to git
+> and the working-tree copy was lost with the sandbox's `download/` wipe —
+> the 10/10 result below stands as recorded, but the script itself must be
+> re-provisioned (or re-written) before the next browser-smoke round.
 
 `node scripts/smoke_phase2.mjs` — headless Chromium with Chrome's **fake
 microphone device** (`--use-fake-device-for-media-stream`), so the real
@@ -260,11 +289,13 @@ Safari, background tab, lock screen, interruptions.
 - **Real microphone input on real devices** (Android Chrome, iOS Safari,
   desktop Chrome) — manual checklist above (§8) + Phase 6 (KI-004). No claims
   made about device behavior.
-- **Client-side sentence endpointing thresholds** (RMS 0.01, 800 ms pause,
-  1.2 s min segment, 20 s cap) are verified by typecheck/unit tests/build
-  only; the sandbox has no real microphone, so threshold tuning on actual
-  devices is Phase 6 (KI-004). Server behavior after a client `flush` is
-  fully covered by the WS-flow tests and live E2E.
+- **Client-side sentence endpointing thresholds** (RMS 0.01, 800 ms sentence
+  pause, 1.2 s min segment, 4.5 s soft cap + 300 ms micro-pause, 9 s cap) are
+  verified by typecheck/unit tests/build and mirrored live by
+  `scripts/e2e_continuous_speech_check.py` (state machine identical to the
+  hook — §5b); the sandbox has no real microphone, so device-level tuning of
+  these thresholds is Phase 6 (KI-004). Server behavior after a client
+  `flush` is fully covered by the WS-flow tests and live E2E.
 - **Silero VAD thresholds on real room noise** (fan, keyboard, street noise)
   — the gate is verified on synthetic buffers and neural-voice fixtures;
   real-world false-reject/false-accept rates are unmeasured (Phase 6 input).

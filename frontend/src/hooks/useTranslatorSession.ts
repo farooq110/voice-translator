@@ -52,7 +52,15 @@ const CHUNK_MS = 100 // worklet chunk cadence — onLevel fires once per chunk
 const ENDPOINT_SPEECH_RMS = 0.01 // RMS ≥ this counts as speech (mic has AGC)
 const ENDPOINT_SILENCE_MS = 800 // pause length that closes a sentence
 const ENDPOINT_MIN_SEGMENT_MS = 1_200 // never auto-flush less audio than this
-const ENDPOINT_MAX_SEGMENT_MS = 20_000 // hard cap — flush even without a pause
+// Live segmentation caps (KI-009, ADR-0010). Without them one long stretch of
+// continuous speech produced nothing until the 20 s cap — and the whole blob
+// then needed ~6 s to decode. A segment is now also closed at the FIRST
+// natural micro-pause after 4.5 s of audio, and no buffer grows past 9 s
+// (worst-case decode ≈ 3 s at the measured ur RTF of 0.31 — results keep
+// flowing while the user keeps talking).
+const ENDPOINT_SOFT_CAP_MS = 4_500 // from here on, a micro-pause closes the segment
+const ENDPOINT_MICRO_PAUSE_MS = 300 // micro-pause that may close a ≥ soft-cap segment
+const ENDPOINT_MAX_SEGMENT_MS = 9_000 // hard cap — flush even without a pause
 // Tail-capture window (KI-008): when stop is tapped the mic stays open this
 // much longer so the final words are padded with REAL trailing silence —
 // tapping stop the instant speech ends hard-cuts the last word against the
@@ -169,6 +177,10 @@ export function useTranslatorSession(wsUrl: string): SessionState {
    * no_speech_detected banner (silence-drain flushes are expected, see
    * noSpeechPolicy.ts). */
   const lastFlushHadSpeechRef = useRef(true)
+  /** Speech flushes whose transcription (or error) has not arrived yet. The
+   * Transcribing… indicator stays up until this counter reaches zero, so
+   * overlapping flushes during continuous speech never clear it early. */
+  const pendingTranscriptionsRef = useRef(0)
   const configRef = useRef<HelloConfig>({
     native_language: nativeLanguage,
     preferred_language: preferredLanguage,
@@ -179,6 +191,16 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     preferred_language: preferredLanguage,
     audio: AUDIO_FORMAT,
   }
+
+  /** One in-flight decode landed (transcription or error for a speech
+   * flush). Only clear the indicator when the LAST pending decode is done —
+   * flushes overlap once segments stream in every few seconds (KI-009). */
+  const settleTranscription = useCallback(() => {
+    if (pendingTranscriptionsRef.current > 0) {
+      pendingTranscriptionsRef.current -= 1
+      if (pendingTranscriptionsRef.current === 0) setTranscribing(false)
+    }
+  }, [])
 
   const finalizeRecording = useCallback(async () => {
     recordingRef.current = false
@@ -198,7 +220,10 @@ export function useTranslatorSession(wsUrl: string): SessionState {
       // The utterance is now on the server — show progress until the result
       // (or an error) arrives instead of a silent dead wait. Silence-only
       // drains (hands-free idle) never set the indicator.
-      if (endpointRef.current.speechSeen) setTranscribing(true)
+      if (endpointRef.current.speechSeen) {
+        pendingTranscriptionsRef.current += 1
+        setTranscribing(true)
+      }
     }
     endpointRef.current = freshEndpointState()
   }, [])
@@ -233,7 +258,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
           at: Date.now(),
         }
         setTranscripts((prev) => [...prev.slice(-(MAX_TRANSCRIPTS - 1)), entry])
-        setTranscribing(false)
+        settleTranscription()
         return
       }
       if (event.type === 'error') {
@@ -244,11 +269,11 @@ export function useTranslatorSession(wsUrl: string): SessionState {
         if (event.code === 'no_speech_detected' && !surfaceNoSpeechError(lastFlushHadSpeechRef.current)) {
           return
         }
-        setTranscribing(false)
+        settleTranscription()
         setError({ code: event.code, message: event.message })
       }
     },
-    [],
+    [settleTranscription],
   )
 
   // WS client lifecycle (connect on mount, clean close on unmount).
@@ -279,6 +304,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
       (recordingRef.current || transcribing)
     ) {
       if (recordingRef.current) void finalizeRecording()
+      pendingTranscriptionsRef.current = 0
       setTranscribing(false)
       setError({
         code: 'connection_lost',
@@ -327,14 +353,24 @@ export function useTranslatorSession(wsUrl: string): SessionState {
             ep.speechSeen &&
             ep.bufferedMs >= ENDPOINT_MIN_SEGMENT_MS &&
             ep.silentMs >= ENDPOINT_SILENCE_MS
+          // KI-009: past the soft cap the next natural micro-pause also
+          // closes the segment — continuous speech no longer waits for a
+          // full 800 ms sentence pause (or the old 20 s cap) to produce text.
+          const softCapReached =
+            ep.speechSeen &&
+            ep.bufferedMs >= ENDPOINT_SOFT_CAP_MS &&
+            ep.silentMs >= ENDPOINT_MICRO_PAUSE_MS
           const capReached = ep.bufferedMs >= ENDPOINT_MAX_SEGMENT_MS
-          if (pauseClosedSentence || capReached) {
+          if (pauseClosedSentence || softCapReached || capReached) {
             // Silence-only drains (cap reached, nobody spoke — hands-free
             // idle) still flush to bound the server buffer, but must not
             // show the Transcribing… indicator nor a no_speech banner.
             lastFlushHadSpeechRef.current = ep.speechSeen
             clientRef.current?.flush()
-            if (ep.speechSeen) setTranscribing(true)
+            if (ep.speechSeen) {
+              pendingTranscriptionsRef.current += 1
+              setTranscribing(true)
+            }
             endpointRef.current = freshEndpointState()
           }
         },

@@ -163,6 +163,36 @@ Format: description / reproduction / root cause / fix / verification / status.
   window remains Phase 6 (KI-004).
 - **Status:** RESOLVED (2026-10-31).
 
+## KI-009 — RESOLVED: nothing converts while speaking continuously — results only appear after a pause; newest lines buried at the bottom (user report)
+
+- **Description (user report, 2026-11-01):** with the mic on and continuous
+  speech, nothing was converted "until I pause for a second or two"; the
+  first response came fast, but during long continuous speech results took
+  "quite a bit of time". Second request: "show new sentence at the top
+  instead of the bottom" so fresh results are visible without scrolling.
+- **Reproduction (pre-fix):** `scripts/e2e_continuous_speech_check.py` —
+  `ur_greeting.wav` with every silence run ≥ 250 ms compressed to 200 ms,
+  ×5 (22.5 s continuous speech), real-time streamed: the pre-fix state
+  machine emitted **1 blob flush at the 20 s cap; first text after 22.2 s**
+  (plus a mid-word-cut fragment from the cap flush).
+- **Root cause:** the ADR-0007 endpointer closed segments only at a
+  ≥ 800 ms pause (or the 20 s hard cap) — continuous speech with 200–500 ms
+  micro-pauses never triggered it, so one 20 s blob decoded in ~6 s. The
+  transcript panel additionally rendered oldest-first with auto-scroll to
+  the bottom.
+- **Fix (ADR-0010):** client endpointing v2 — soft cap 4.5 s (the next
+  ≥ 300 ms micro-pause closes the segment) and hard cap 20 s → 9 s
+  (worst-case blob ≈ 3 s decode); a pending-decode counter keeps the
+  `Transcribing…` indicator up until the last overlapping flush lands; the
+  transcript panel renders newest-first (chronological state unchanged) and
+  no longer auto-scrolls. Sentence-pause rule (800 ms) unchanged.
+- **Verification:** backend 65 passed + 1 xfail; frontend typecheck/lint/
+  33 tests/build clean; live check — new mode **5/5 utterances, first text
+  6.6 s (−70 %), flush→text 1.9–2.2 s, all texts correct Urdu**; old-mode
+  baseline reproduced the complaint (docs/testing.md §5b).
+- **Status:** RESOLVED (2026-11-01). Device-level tuning of the new caps
+  stays a Phase 6 input (KI-004).
+
 ## KI-005 — RESOLVED: initial TTS fixtures unusable for ur/es
 
 - **Description:** the sandbox's default TTS voices (Chinese-oriented)

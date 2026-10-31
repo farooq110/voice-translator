@@ -2,6 +2,33 @@
 
 All meaningful project changes. Format based on Keep a Changelog.
 
+## [0.2.1] — Phase 2 defect round — KI-009: continuous-speech latency + newest-first transcript (2026-11-01)
+
+### Fixed
+- **Continuous-speech latency (KI-009, ADR-0010):** the client endpointer
+  now closes a segment at the first natural micro-pause (≥ 300 ms) after
+  4.5 s of audio (soft cap), and the hard cap drops 20 s → 9 s. Continuous
+  speech yields a result every ~4.5 s (measured flush→text ≈ 2 s) instead
+  of one blob after the 20 s cap + ~6 s decode — measured on the live
+  server: first text 22.2 s → **6.6 s (−70 %)**. The 800 ms sentence-pause
+  rule is unchanged for normal speech.
+- **Transcript panel (KI-009):** the newest sentence renders at the TOP of
+  the list (stored order stays chronological); the scroll-to-bottom effect
+  is removed — fresh results are readable instantly.
+- **`Transcribing…` indicator:** a pending-decode counter keeps it visible
+  until the LAST in-flight decode lands (flushes overlap once segments
+  stream every few seconds).
+
+### Added
+- `scripts/e2e_continuous_speech_check.py` — live old-vs-new endpointing
+  benchmark on compressed-silence continuous speech, with a fixture-sanity
+  gate (the old machine must NOT flush below the 20 s cap).
+
+### Verification
+- Backend **65 passed + 1 xfail**; frontend typecheck/lint/**33 tests**/
+  build clean; live E2E 3/3 PASS, silence guard PASS, continuous-speech
+  check PASS (docs/testing.md §5b). `APP_VERSION` 0.2.0 → 0.2.1.
+
 ## [0.2.0] — Phase 2 — Voice Activity Detection and Audio Optimization (2026-10-31)
 
 ### Added
