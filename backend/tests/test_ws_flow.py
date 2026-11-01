@@ -125,6 +125,36 @@ def test_flush_empty_buffer_warns_and_connection_survives(client: TestClient) ->
         assert pong == {"type": "pong", "v": 1, "ts": 123}
 
 
+def test_flush_utterance_id_echoed_on_transcription(client: TestClient) -> None:
+    """BUG-001: the client's utterance_id must come back as the id of the
+    transcription it produced — the client settles by id, never by guesswork."""
+    with _open(client) as ws:
+        ws.send_json(HELLO)
+        assert ws.receive_json()["type"] == "ready"
+        ws.send_bytes(silence_pcm(0.5))
+        ws.send_json({"v": 1, "type": "flush", "utterance_id": "c_0001_ab12cd"})
+        tr = ws.receive_json()
+        assert tr["type"] == "transcription"
+        assert tr["id"] == "c_0001_ab12cd"
+
+
+def test_flush_utterance_id_echoed_on_error(client: TestClient) -> None:
+    """BUG-001: even a rejected flush (empty buffer) echoes the id, so the
+    client can settle exactly that utterance's pending state."""
+    with _open(client) as ws:
+        ws.send_json(HELLO)
+        assert ws.receive_json()["type"] == "ready"
+        ws.send_json({"v": 1, "type": "flush", "utterance_id": "c_0002_feed01"})
+        err = ws.receive_json()
+        assert err["type"] == "error" and err["code"] == "nothing_to_transcribe"
+        assert err["utterance_id"] == "c_0002_feed01"
+        # server-generated id (no client id given) still works
+        ws.send_json({"v": 1, "type": "flush"})
+        err2 = ws.receive_json()
+        assert err2["code"] == "nothing_to_transcribe"
+        assert err2["utterance_id"] is None
+
+
 def test_ping_pong_echo(client: TestClient) -> None:
     with _open(client) as ws:
         ws.send_json(HELLO)

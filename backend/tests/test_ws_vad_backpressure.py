@@ -49,6 +49,22 @@ def _tight_settings(**overrides: int) -> Settings:
     )
 
 
+def test_vad_gate_error_carries_utterance_id() -> None:
+    """BUG-001: the gate rejection must echo the flush's utterance_id so the
+    client can settle exactly that utterance (never a newer one)."""
+    stt = FakeSTT()
+    app = create_app(settings=_tight_settings(), stt=stt, vad=SilentVAD())
+    with TestClient(app) as client:
+        with _open(client) as ws:
+            _ready(ws)
+            ws.send_bytes(silence_pcm(0.5))
+            ws.send_json({"v": 1, "type": "flush", "utterance_id": "c_0007_beef42"})
+            err = ws.receive_json()
+            assert err["type"] == "error" and err["code"] == "no_speech_detected"
+            assert err["utterance_id"] == "c_0007_beef42"
+            assert stt.calls == 0, "STT must NOT be invoked for gated audio"
+
+
 def test_vad_gate_rejects_silence_without_calling_stt() -> None:
     """The decisive Phase 2 behavior: gated audio never reaches the model."""
     stt = FakeSTT()
@@ -125,10 +141,16 @@ def test_per_session_pending_cap_answers_server_busy() -> None:
             assert stt.started.wait(timeout=5), "first decode must start"
             # second flush while the first is decoding → backpressure
             ws.send_bytes(silence_pcm(0.5))
-            ws.send_json({"v": 1, "type": "flush"})
+            ws.send_json({"v": 1, "type": "flush", "utterance_id": "c_0002_cafe02"})
             err = ws.receive_json()
             assert err["type"] == "error" and err["code"] == "server_busy"
             assert err["fatal"] is False
+            # BUG-001: the id is echoed even under backpressure…
+            assert err["utterance_id"] == "c_0002_cafe02"
+            # …and the wording says the segment was DROPPED (nothing to re-flush)
+            # with a queue-depth hint (OBS-005)
+            assert "dropped" in err["message"]
+            assert "1/1" in err["message"]
             # the first utterance still completes and is delivered
             stt.release.set()
             tr = ws.receive_json()
@@ -154,9 +176,11 @@ def test_global_queue_cap_answers_server_busy_across_sessions() -> None:
             assert stt.started.wait(timeout=5)
             # a DIFFERENT session flushes while the global queue is full
             ws2.send_bytes(silence_pcm(0.5))
-            ws2.send_json({"v": 1, "type": "flush"})
+            ws2.send_json({"v": 1, "type": "flush", "utterance_id": "c_0009_dead09"})
             err = ws2.receive_json()
             assert err["type"] == "error" and err["code"] == "server_busy"
+            assert err["utterance_id"] == "c_0009_dead09"
+            assert "queue 1/1" in err["message"]
             stt.release.set()
             assert ws1.receive_json()["type"] == "transcription"
             # queue slot released → session 2 works again

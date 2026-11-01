@@ -48,17 +48,24 @@ non-fatal `hello_already_sent`; identical languages → non-fatal
 
 ```
 client → binary PCM16 chunk (typ. 100 ms = 3 200 bytes)
-client → {"v":1,"type":"flush"}                  # end of utterance
+client → {"v":1,"type":"flush","utterance_id":"c_0001_ab12cd"}   # end of utterance
 client ← {"v":1,"type":"transcription", …}       # result (see below)
 client → {"v":1,"type":"ping","ts":123}          # heartbeat (client, 20 s cadence)
 client ← {"v":1,"type":"pong","ts":123}
 ```
 
+`utterance_id` on `flush` is **optional** (added in the BUG-001 fix,
+ADR-0011): a client-generated correlation id (`[A-Za-z0-9_-]{1,64}`) that
+the server echoes as the `transcription.id` and on every flush-scoped
+`error.utterance_id`, so the client can settle exactly the utterance a
+result belongs to. Server-initiated auto-flushes omit it and the server
+generates its own id (`u_NNNN_hex`).
+
 `transcription` fields:
 
 | Field | Meaning |
 | --- | --- |
-| `id` | utterance id (`u_NNNNNN_hex`) |
+| `id` | utterance id — the client's echoed `utterance_id`, or a server-generated `u_NNNN_hex` for auto-flushes |
 | `text` | transcription (empty string never sent; use `nothing_to_transcribe` / `no_speech_detected`) |
 | `language` | Phase 1: the configured native language (primary subtag) — the STT language is **pinned** to the user's selection, not auto-detected (KI-006 fix, ADR-0006) |
 | `language_probability` | 0..1; always `1.0` when the language is pinned from hello config |
@@ -90,14 +97,21 @@ carries all required signals.
 **Backpressure (ADR-0009):** at most `STT_MAX_PENDING_PER_SESSION` (4)
 utterances per session and `STT_MAX_QUEUE_DEPTH` (16) globally are admitted
 for decoding at once. A flush beyond either cap is answered `server_busy`
-(non-fatal); the buffered audio is consumed (bounded memory) and the client
-may re-flush later.
+(non-fatal); the buffered audio is consumed and **dropped by design** —
+there is nothing for the client to re-flush. The message carries a
+queue-depth hint (e.g. `queue 16/16`) and the echoed `utterance_id`
+(ADR-0011), so the client can settle that utterance and simply keep
+speaking.
 
 ## 4. Errors
 
 ```json
-{"v":1,"type":"error","code":"…","message":"…","fatal":false}
+{"v":1,"type":"error","code":"…","message":"…","fatal":false,"utterance_id":"c_0001_ab12cd"}
 ```
+
+`utterance_id` (ADR-0011, optional) correlates the error with the flush that
+caused it; it is `null`/absent for connection-level errors and
+server-initiated auto-flushes.
 
 | Code | Fatal | Meaning |
 | --- | --- | --- |
@@ -114,7 +128,7 @@ may re-flush later.
 | `invalid_chunk_alignment` | no | odd byte count dropped |
 | `nothing_to_transcribe` | no | flush with empty/below-floor buffer |
 | `no_speech_detected` | no | audio had no recognizable speech (server Silero gate, dead silence, or hallucination-only decode) — connection stays open |
-| `server_busy` | no | **Phase 2 backpressure (ADR-0009):** per-session or global STT admission cap reached — the flush was consumed, retry shortly |
+| `server_busy` | no | **Phase 2 backpressure (ADR-0009):** per-session or global STT admission cap reached — the buffered audio was consumed and DROPPED by design (nothing to re-flush); message includes a queue-depth hint (OBS-005) |
 | `stt_timeout` | no | inference exceeded `STT_TIMEOUT_SECONDS` |
 | `stt_error` | no | provider failure (connection stays open) |
 
@@ -127,8 +141,12 @@ capacity, 1001 idle).
 - Keep chunks ≤ 256 KiB (the reference client sends 100 ms chunks).
 - Heartbeat with `ping` every 20 s; reconnect on missing `pong` (10 s) — the
   reference client reconnects with capped exponential backoff (600 ms → 10 s).
-- Handle `server_busy` by re-flushing after a short wait (the reference
-  client surfaces it as a non-fatal notice; audio chunks keep flowing).
+- Send `flush` with a unique client-generated `utterance_id` (ADR-0011) and
+  settle in-flight state strictly by the echoed id — never attribute an
+  outcome to a newer flush.
+- On `server_busy`, do NOT re-flush: that segment was dropped by design —
+  keep speaking; the next segment is admitted normally (the reference client
+  surfaces it as a non-fatal notice; audio chunks keep flowing).
 - The reference client additionally drops outbound audio chunks while its
   socket send buffer exceeds 1 MiB (uplink backpressure; counted in
   `droppedChunkCount`) — control messages are never dropped.

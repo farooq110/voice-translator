@@ -4,9 +4,13 @@ interface HandsFreeToggleProps {
 }
 
 /**
- * Hands-free mode toggle (Phase 2 — continuous capture behind a feature
- * flag). Rendered only when the build enables the flag
- * (VITE_FEATURE_HANDS_FREE, see src/config/flags.ts).
+ * Capture-mode toggle (Phase 2, behind the VITE_FEATURE_HANDS_FREE flag).
+ *
+ * BUG-002 fix: the two modes now behave differently AND say so —
+ * - ON (hands-free): the mic stays open; sentences transcribe automatically
+ *   at every pause (ADR-0007/0010 endpointing).
+ * - OFF (push-to-talk): no auto-flush while recording — everything you say
+ *   in one press is transcribed when you tap stop (ADR-0011).
  */
 export function HandsFreeToggle({ checked, onChange }: HandsFreeToggleProps) {
   return (
@@ -18,8 +22,17 @@ export function HandsFreeToggle({ checked, onChange }: HandsFreeToggleProps) {
         onChange={(event) => onChange(event.target.checked)}
       />
       <span className="handsfree__text">
-        <strong>Hands-free</strong> — keep the microphone open and let sentences transcribe
-        themselves at every pause. Tap the mic again to stop.
+        {checked ? (
+          <>
+            <strong>Hands-free</strong> — the mic stays open and every sentence transcribes
+            itself at the pauses. Tap the mic again to stop.
+          </>
+        ) : (
+          <>
+            <strong>Push-to-talk</strong> — tap the mic, speak, then tap again to transcribe
+            everything you said in one go.
+          </>
+        )}
       </span>
     </label>
   )

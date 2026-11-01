@@ -36,24 +36,25 @@ cd backend && HF_HOME=../models/huggingface uv run python scripts/bench_stt.py
 # Phase 2 VAD pipeline benchmark (gate cost, silence rejection, trim, accuracy)
 cd backend && HF_HOME=../models/huggingface uv run python scripts/bench_vad.py
 
-# Phase 2 browser smoke (headless Chromium with Chrome's fake microphone)
-node scripts/smoke_phase2.mjs
+# Phase 2 browser smoke (headless Chromium with Chrome's fake microphone;
+# screenshots land in docs/screenshots/phase2/)
+node frontend/scripts/smoke_phase2.mjs
 ```
 
-## 2. Backend test suite — actual result (2026-10-31, after ADR-0009; re-verified 2026-11-01 after ADR-0010 — same counts)
+## 2. Backend test suite — actual result (2026-11-01, after ADR-0011)
 
-`uv run pytest` → **65 passed, 1 xfailed** in ~7 s (59 unit + 6 real-model).
+`uv run pytest` → **69 passed, 1 xfailed** in ~23 s (63 unit + 6 real-model).
 
 | Area | Tests | Notes |
 | --- | --- | --- |
 | Health endpoint | 1 | payload contract (now incl. `vad` + `stt_queue` blocks) |
-| Protocol models (pydantic) | 9 | version check, forbidden extras, bad audio format |
+| Protocol models (pydantic) | 10 | version check, forbidden extras, bad audio format, **flush `utterance_id` optional + pattern-validated (ADR-0011)** |
 | Audio validation | 4 | size cap, 16-bit alignment |
 | Session manager | 6 | limits, cleanup, buffer swap-clear |
-| WS flow (FakeSTT via DI) | 17 | handshake, binary-before-hello fatal, flush→transcription, **native-language hint reaches STT**, **regional `ur-PK` reduced to `ur`**, **`no_speech_detected` on empty decode**, empty flush, ping/pong, malformed JSON, wrong version, oversized chunk, odd alignment, bad sample rate, duplicate hello, identical-language warning, 30 s auto-flush, session cleanup, mixed valid/invalid chunks |
+| WS flow (FakeSTT via DI) | 19 | handshake, binary-before-hello fatal, flush→transcription, **native-language hint reaches STT**, **regional `ur-PK` reduced to `ur`**, **`no_speech_detected` on empty decode**, empty flush, ping/pong, malformed JSON, wrong version, oversized chunk, odd alignment, bad sample rate, duplicate hello, identical-language warning, 30 s auto-flush, session cleanup, mixed valid/invalid chunks, **client `utterance_id` echoed on transcription + on `nothing_to_transcribe` (BUG-001)** |
 | VAD planner (pure) | 9 | gate on no/short speech, trim ± pad clamping, split at ≥700 ms pauses, no split below threshold, span-cap forced split, `max_chunks` merge, honest source duration |
 | VAD real Silero (not mocked) | 5 | fixture detected+trimmed, silence gated, low-level noise gated, two bursts segmented, disabled = exact pass-through |
-| WS VAD + backpressure (fakes) | 7 | **gate rejects silence BEFORE STT (0 calls)**, trim delivers shorter audio + honest duration, split joins texts in order, per-session `server_busy`, global `server_busy` across sessions, slot released on STT failure, health exposes vad/queue |
+| WS VAD + backpressure (fakes) | 8 | **gate rejects silence BEFORE STT (0 calls)**, **gate rejection echoes the client `utterance_id` (BUG-001)**, trim delivers shorter audio + honest duration, split joins texts in order, per-session `server_busy` (echoed id + **dropped-by-design wording + queue-depth hint**), global `server_busy` across sessions (echoed id + `queue 1/1`), slot released on STT failure, health exposes vad/queue |
 | Real-model STT (not mocked) | 6 + 1 xfail | see §4; new: **full WS pipeline — real Silero gate + real Whisper over `/ws/audio` (ur → Arabic script)** |
 
 The 1 xfail is **deliberate and documented**: Urdu language *label* detection
@@ -65,13 +66,15 @@ Settings injectability note (found by the Phase 2 tests): the WS endpoint now
 reads `app.state.settings` — the previously used `get_settings()` (lru_cache)
 bypassed per-app overrides in tests.
 
-## 3. Frontend — actual results (2026-10-31, Phase 2; re-verified 2026-11-01 after ADR-0010 — same counts)
+## 3. Frontend — actual results (2026-11-01, after ADR-0011)
 
 - `tsc --noEmit` (strict, `noUncheckedIndexedAccess`) → clean.
 - `eslint . --max-warnings 0` → clean.
-- `vitest run` → **33 passed** (protocol parser 10, languages 5, WS client 9 —
-  fake WebSocket, fake timers, reconnect/backoff/heartbeat + **new:
-  uplink-stall chunk dropping**, flags 7, no-speech policy 2).
+- `vitest run` → **41 passed** (protocol parser 12 — incl. the BUG-001
+  `utterance_id` builder/parser cases, languages 5, WS client 10 — fake
+  WebSocket, fake timers, reconnect/backoff/heartbeat, uplink-stall chunk
+  dropping, **correlation id on flush**, flags 7, no-speech policy 2,
+  **flushTracker 5 — both QA mis-attribution modes**).
 - `vite build` → ✓ (`index.html` 1.2 kB, JS 244 kB / 77 kB gzip, CSS 6.5 kB).
 
 ## 4. Real STT validation — actual results (2026-10-31, after ADR-0007: model `small`, beam5, VAD)
@@ -234,28 +237,32 @@ PASS: server reported no_speech_detected (hallucination guard active)
 (pre-fix, the same 2 s of silence produced a 447-character hallucinated
 transcription.)
 
-## 7. Browser smoke test — actual result (2026-10-31, Phase 2)
+## 7. Browser smoke test — actual result (re-provisioned 2026-11-01, 10/10)
 
-> Note (2026-11-01): `scripts/smoke_phase2.mjs` was never committed to git
-> and the working-tree copy was lost with the sandbox's `download/` wipe —
-> the 10/10 result below stands as recorded, but the script itself must be
-> re-provisioned (or re-written) before the next browser-smoke round.
+> `frontend/scripts/smoke_phase2.mjs` was re-provisioned on 2026-11-01
+> (OBS-004; the original was never committed and was lost with the sandbox's
+> `download/` wipe). It now uses **playwright** (`npm i -D playwright`;
+> `npx playwright install chromium` once) and saves the screenshots into the
+> tracked `docs/screenshots/phase2/`.
 
-`node scripts/smoke_phase2.mjs` — headless Chromium with Chrome's **fake
-microphone device** (`--use-fake-device-for-media-stream`), so the real
-capture → WebSocket → server VAD → UI pipeline runs end to end. **10/10
-checks passed**:
+`node frontend/scripts/smoke_phase2.mjs` — headless Chromium with Chrome's
+**fake microphone device** (`--use-fake-device-for-media-stream`), so the
+real capture → WebSocket → server VAD → UI pipeline runs end to end.
+**10/10 checks passed** (2026-11-01, app v0.2.2 after ADR-0011):
 
-- App renders; WS connected; zero console/page errors while streaming.
-- **Hands-free toggle visible (flag ON), default checked, `vt.hands_free`
-  persists to localStorage.**
+- App renders; WS connected; **zero console/page errors across the whole
+  run** (streaming, stop, reloads).
+- **Hands-free toggle visible (flag ON), default checked** (`vt.hands_free`
+  is lazily persisted — written on first toggle; persistence proven by the
+  OFF-across-reload check).
 - Status wording switches: hands-free ON → "Hands-free listening…", OFF →
-  "Listening…".
-- 4 s of fake-audio streaming: no error banner, no crashes (the fake device
-  emits a tone — the server VAD correctly classifies it as non-speech on the
-  final flush; the banner that follows stop is the honest no-speech path for
-  "sound that is not speech").
-- Desktop (1280 px) and mobile (390×844) screenshots: `download/phase2-screens/`.
+  **"Push-to-talk recording…"** (BUG-002 fix, ADR-0011).
+- 4 s of fake-audio streaming in PTT mode → stop: the only banner is the
+  honest `no_speech_detected` path (the fake device emits a tone — the
+  server VAD correctly classifies it as non-speech), and the app stays
+  fully interactive afterwards.
+- Desktop (1280 px) and mobile (390×844) screenshots:
+  `docs/screenshots/phase2/{desktop,mobile}.png` (committed).
 
 ## 8. Real-device testing (P2-05) — what was verified vs what needs a human
 
@@ -290,7 +297,8 @@ Safari, background tab, lock screen, interruptions.
   desktop Chrome) — manual checklist above (§8) + Phase 6 (KI-004). No claims
   made about device behavior.
 - **Client-side sentence endpointing thresholds** (RMS 0.01, 800 ms sentence
-  pause, 1.2 s min segment, 4.5 s soft cap + 300 ms micro-pause, 9 s cap) are
+  pause, 1.2 s min segment, 4.5 s soft cap + 300 ms micro-pause, 9 s cap
+  hands-free / 20 s push-to-talk safety cap — ADR-0011) are
   verified by typecheck/unit tests/build and mirrored live by
   `scripts/e2e_continuous_speech_check.py` (state machine identical to the
   hook — §5b); the sandbox has no real microphone, so device-level tuning of

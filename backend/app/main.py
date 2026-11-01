@@ -29,7 +29,7 @@ from .stt.base import STTProvider
 from .ws.audio_ws import router as audio_router
 from .ws.backpressure import SttQueue
 
-APP_VERSION = "0.2.1"
+APP_VERSION = "0.2.2"
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

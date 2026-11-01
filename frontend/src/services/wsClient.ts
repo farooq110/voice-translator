@@ -111,9 +111,12 @@ export class TranslatorWsClient {
     return this.droppedChunks
   }
 
-  flush(): void {
+  /** Flush the server buffer. `utteranceId` (BUG-001) is the client-generated
+   * correlation id echoed on the transcription/error for this flush, so the
+   * session hook can settle exactly that utterance's pending state. */
+  flush(utteranceId?: string): void {
     if (!this.isReady() || this.ws === null) return
-    this.sendJson(flushMessage())
+    this.sendJson(flushMessage(utteranceId))
   }
 
   // ------------------------------------------------------------- internals

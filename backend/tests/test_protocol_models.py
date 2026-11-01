@@ -78,13 +78,32 @@ def test_ping_and_flush_parse() -> None:
     assert parse_client_message({"v": 1, "type": "flush"}).type == "flush"
 
 
+def test_flush_utterance_id_optional_and_validated() -> None:
+    """BUG-001: optional client-generated correlation id on flush."""
+    assert parse_client_message({"v": 1, "type": "flush"}).utterance_id is None
+    msg = parse_client_message(
+        {"v": 1, "type": "flush", "utterance_id": "c_0001_ab12cd"}
+    )
+    assert msg.utterance_id == "c_0001_ab12cd"
+    # charset/length are enforced — free-form strings stay out
+    with pytest.raises(ValidationError):
+        parse_client_message({"v": 1, "type": "flush", "utterance_id": "bad id with spaces!"})
+    with pytest.raises(ValidationError):
+        parse_client_message({"v": 1, "type": "flush", "utterance_id": "x" * 65})
+
+
 def test_protocol_version_constant() -> None:
     assert PROTOCOL_VERSION == 1
 
 
 def test_event_serialization_shapes() -> None:
     err = ErrorEvent(code="x", message="y")
-    assert err.model_dump() == {"type": "error", "v": 1, "code": "x", "message": "y", "fatal": False}
+    assert err.model_dump() == {
+        "type": "error", "v": 1, "code": "x", "message": "y",
+        "fatal": False, "utterance_id": None,
+    }
+    attributed = ErrorEvent(code="x", message="y", utterance_id="c_0001_ab12cd")
+    assert attributed.utterance_id == "c_0001_ab12cd"
 
     tr = TranscriptionEvent(id="u_1", text="hi", language="en", language_probability=0.9,
                             audio_duration_s=1.0, processing_ms=5)

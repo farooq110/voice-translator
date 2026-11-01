@@ -36,7 +36,7 @@ export default function App() {
   const statusLine = session.finishing
     ? 'Finishing… capturing the last words'
     : session.recording
-      ? `${session.handsFree ? 'Hands-free listening' : 'Listening'}… ${
+      ? `${session.handsFree ? 'Hands-free listening' : 'Push-to-talk recording'}… ${
           session.elapsedMs >= 1000 ? `${Math.floor(session.elapsedMs / 1000)} s` : 'just started'
         }`
       : session.transcribing

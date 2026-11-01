@@ -153,6 +153,29 @@ describe('TranslatorWsClient', () => {
     expect(types).toContain('flush')
   })
 
+  it('sends the correlation id on flush (BUG-001)', async () => {
+    const { client } = makeClient()
+    client.connect()
+    const ws = lastSocket()
+    ws.open()
+    await vi.advanceTimersByTimeAsync(0)
+    ws.serverFrame(READY_EVENT)
+
+    client.flush('c_0001_ab12cd')
+    const flushMsg = ws
+      .sentJson()
+      .find((msg) => (msg as { type?: string }).type === 'flush') as
+      | { type: string; utterance_id?: string }
+      | undefined
+    expect(flushMsg?.utterance_id).toBe('c_0001_ab12cd')
+    // and without an id the field stays absent (server generates its own)
+    client.flush()
+    const plainFlush = ws
+      .sentJson()
+      .filter((msg) => (msg as { type?: string }).type === 'flush') as { utterance_id?: string }[]
+    expect(plainFlush[1]).not.toHaveProperty('utterance_id')
+  })
+
   it('drops audio chunks when the uplink stalls (backpressure)', async () => {
     const { client } = makeClient()
     client.connect()

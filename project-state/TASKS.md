@@ -70,6 +70,22 @@ A task may only be marked `DONE` after implementation **and** verification.
 | GIT-05 | Recreate `download/Phase-One.zip` (sandbox wiped `download/` again): Phase-1-final tree @ tag `phase-one-final` + git-history bundle + MANIFEST, integrity verified | DONE |
 | GIT-06 | Push to origin — authenticated via the user-provided SSH key (ed25519, fingerprint `SHA256:2lsCE9…`) through a paramiko `core.sshCommand` shim (sandbox has no ssh binary; GitHub's published host-key fingerprints pinned; remote URL switched to `git@github.com:farooq110/voice-translator.git`). Remote `main` (web-UI bootstrap: one-commit README "# voice-translator") superseded by force-push; `main` + `phase-2` both pushed | DONE |
 
+## QA fix round — Phase 2 independent audit (2026-11-01) — COMPLETE
+
+Input: user-provided QA report ("See the QA report and fixed the app") —
+verdict PASS with 2 Low defects + 3 observations. No new feature scope; all
+fixes local to the Phase 2 code.
+
+| ID | Task | Status |
+| --- | --- | --- |
+| QA-01 | BUG-001 (ADR-0011): protocol v1 optional `flush.utterance_id` + `error.utterance_id` echo (backend, additive); client `FlushTracker` per-flush attribution — Transcribing… indicator derived, stuck state structurally impossible; regression tests both audit modes (backend 69+1xfail, frontend 41) | DONE |
+| QA-02 | BUG-002 (ADR-0011): true push-to-talk when hands-free OFF — pause/soft-cap auto-flushes suppressed, flush on stop (tail capture kept, 20 s safety cap); toggle + status wording describe the real behavior | DONE |
+| QA-03 | OBS-005 (partial): `server_busy` messages now say the segment was dropped BY DESIGN and carry a queue-depth hint (`1/1 in flight`, `queue 16/16`); protocol spec client-obligation updated (no re-flush) | DONE |
+| QA-04 | OBS-003: `.env` untracked (`git rm --cached`), already gitignored | DONE |
+| QA-05 | OBS-004: README image link fixed to tracked `docs/screenshots/phase2/`; `frontend/scripts/smoke_phase2.mjs` re-provisioned (playwright, fake mic) and re-run live: 10/10, zero console errors; screenshots committed | DONE |
+| QA-06 | Re-verification: backend 69 passed + 1 xfail; frontend tsc/lint/41 tests/build clean; live E2E 3/3 + silence guard PASS + continuous speech 5/5 (first text 6.28 s); docs: ADR-0011, protocol spec, testing.md, KI-010/011, CHANGELOG 0.2.2, APP_VERSION 0.2.2 | DONE |
+| QA-07 | OBS-005 remainder (WS origin allow-listing, authentication) — stays Phase 10 per the audit and docs | DEFERRED (Phase 10) |
+
 ## Phase 3+ — see `prompt.md` section 17
 
 Translation decision engine (P3), TTS + playback (P4), two-person MVP (P5),

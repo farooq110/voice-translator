@@ -107,12 +107,21 @@ class _Connection:
         async with self._send_lock:
             await self.websocket.send_text(event.model_dump_json())
 
-    async def send_error(self, code: str, message: str, *, fatal: bool = False) -> None:
+    async def send_error(
+        self,
+        code: str,
+        message: str,
+        *,
+        fatal: bool = False,
+        utterance_id: str | None = None,
+    ) -> None:
         logger.debug(
-            "ws.error session_id=%s code=%s fatal=%s message=%s",
-            self.session.id, code, fatal, message,
+            "ws.error session_id=%s code=%s fatal=%s utterance_id=%s message=%s",
+            self.session.id, code, fatal, utterance_id, message,
         )
-        await self._send(ErrorEvent(code=code, message=message, fatal=fatal))
+        await self._send(
+            ErrorEvent(code=code, message=message, fatal=fatal, utterance_id=utterance_id)
+        )
 
     # ------------------------------------------------------------------ in
 
@@ -147,7 +156,7 @@ class _Connection:
             await self._send(PongEvent(ts=ts))
             return True
         if isinstance(message, FlushMessage):
-            await self.flush_buffer()
+            await self.flush_buffer(utterance_id=message.utterance_id)
             return True
         return True
 
@@ -227,20 +236,28 @@ class _Connection:
 
     # ------------------------------------------------------------------ stt
 
-    async def flush_buffer(self) -> None:
+    async def flush_buffer(self, utterance_id: str | None = None) -> None:
+        """Transcribe the buffered audio as one utterance.
+
+        BUG-001: the caller's `utterance_id` (client-generated correlation id)
+        is attached to EVERY error this flush can produce and echoed as the
+        transcription id, so the client can settle exactly this utterance —
+        never a newer one (the old shared-ref attribution raced under load).
+        """
         audio = self.session.take_buffer()
         min_bytes = int(self.settings.min_utterance_seconds * self.settings.audio_sample_rate) * 2
         if len(audio) < min_bytes:
             await self.send_error(
                 "nothing_to_transcribe",
                 "No speech captured since the last transcription.",
+                utterance_id=utterance_id,
             )
             return
 
         # Backpressure (Phase 2): bound in-flight decodes per session, then
-        # globally. Overflow is a non-fatal `server_busy` — the client keeps
-        # the connection and simply re-flushes later; nothing is queued
-        # without limit.
+        # globally. Overflow is a non-fatal `server_busy` — the buffered audio
+        # was consumed and is dropped BY DESIGN (ADR-0009), so there is nothing
+        # for the client to re-flush; it simply keeps speaking.
         if len(self._pending) >= self.settings.stt_max_pending_per_session:
             logger.info(
                 "ws.busy session_id=%s reason=pending_session pending=%d",
@@ -248,22 +265,31 @@ class _Connection:
             )
             await self.send_error(
                 "server_busy",
-                "Still transcribing previous speech — one moment, then try again.",
+                f"Still transcribing previous speech "
+                f"({len(self._pending)}/{self.settings.stt_max_pending_per_session} in flight) — "
+                f"that segment was dropped; keep talking, the next one will be transcribed.",
+                utterance_id=utterance_id,
             )
             return
         if not self.stt_queue.try_acquire():
+            stats = self.stt_queue.stats()
             logger.info(
                 "ws.busy session_id=%s reason=queue_full queued=%d",
-                self.session.id, self.stt_queue.queued,
+                self.session.id, stats["queued"],
             )
             await self.send_error(
                 "server_busy",
-                "Server is busy transcribing other audio — try again in a moment.",
+                f"Server is busy transcribing other audio "
+                f"(queue {stats['queued']}/{stats['max']}) — that segment was dropped; "
+                f"keep talking, the next one will be transcribed.",
+                utterance_id=utterance_id,
             )
             return
 
         self.session.utterances += 1
-        utterance_id = f"u_{self.session.utterances:04d}_{uuid.uuid4().hex[:6]}"
+        if utterance_id is None:
+            # Server-initiated auto-flush (buffer cap): generate the id here.
+            utterance_id = f"u_{self.session.utterances:04d}_{uuid.uuid4().hex[:6]}"
         task = asyncio.create_task(self._transcribe_and_deliver(audio, utterance_id))
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)
@@ -305,6 +331,7 @@ class _Connection:
                     "no_speech_detected",
                     "No speech was captured in that utterance — try again, a little "
                     "closer to the microphone.",
+                    utterance_id=utterance_id,
                 )
                 return
 
@@ -314,12 +341,15 @@ class _Connection:
             )
         except asyncio.TimeoutError:
             await self.send_error(
-                "stt_timeout", "Speech recognition took too long; try a shorter utterance."
+                "stt_timeout", "Speech recognition took too long; try a shorter utterance.",
+                utterance_id=utterance_id,
             )
             return
         except Exception:  # noqa: BLE001 — provider failure must not kill the socket
             logger.exception("stt failed session_id=%s", self.session.id)
-            await self.send_error("stt_error", "Speech recognition failed.")
+            await self.send_error(
+                "stt_error", "Speech recognition failed.", utterance_id=utterance_id
+            )
             return
         finally:
             # Exactly one release per acquired slot (acquired in flush_buffer).
@@ -343,6 +373,7 @@ class _Connection:
                 "no_speech_detected",
                 "Speech could not be recognized in that utterance — try again, a little "
                 "closer to the microphone.",
+                utterance_id=utterance_id,
             )
             return
 

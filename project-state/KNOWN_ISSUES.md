@@ -193,6 +193,49 @@ Format: description / reproduction / root cause / fix / verification / status.
 - **Status:** RESOLVED (2026-11-01). Device-level tuning of the new caps
   stays a Phase 6 input (KI-004).
 
+## KI-010 — RESOLVED: Transcribing… indicator can stay stuck after a mis-attributed error under server load (QA BUG-001)
+
+- **Description (independent QA audit, 2026-11-01, BUG-001):** error events
+  carried no utterance reference, so the client attributed every outcome to
+  "the most recent flush" via one shared ref. Under load, outcomes arrive
+  out of order: (a) a speech flush answered `no_speech_detected` after a
+  newer silence-only drain overwrote the ref skipped the settle path — the
+  pending counter leaked and the Transcribing… indicator never cleared;
+  (b) a `server_busy`/`stt_timeout` for a silence-only drain settled
+  unconditionally, clearing the indicator while a real speech decode was
+  still in flight.
+- **Root cause:** no correlation id on error events + single-shared-ref
+  attribution + unconditional settle on non-no_speech errors.
+- **Fix (ADR-0011):** protocol v1 gains optional `flush.utterance_id`
+  (client-generated, echoed by the server on `transcription.id` and
+  `error.utterance_id` for every flush-scoped error); the client keeps a
+  per-flush `Map<id, hadSpeech>` (`FlushTracker`) and settles strictly by
+  id; the Transcribing… indicator is DERIVED from the map (a stuck state is
+  structurally impossible); connection loss clears the map.
+- **Verification:** backend 69 passed + 1 xfail (new: id echoed on
+  transcription / `nothing_to_transcribe` / VAD-gate rejection /
+  `server_busy`); frontend 41 passed (new: `flushTracker.test.ts` covers
+  both audit reproduction modes + unknown-id + clear; protocol/wsClient
+  builders and parsers cover the new field); live E2E re-run — synthetic
+  3/3, silence guard PASS, continuous speech 5/5 (first text 6.28 s,
+  flush→text 1.84–1.98 s); browser smoke 10/10 with zero console errors.
+- **Status:** RESOLVED (2026-11-01).
+
+## KI-011 — RESOLVED: hands-free toggle had no behavioral effect; label implied push-to-talk when off (QA BUG-002)
+
+- **Description (independent QA audit, 2026-11-01, BUG-002):** toggling
+  hands-free OFF changed only the status wording — endpointing and
+  auto-flush stayed on, while the label promised push-to-talk.
+- **Fix (ADR-0011):** true push-to-talk implemented when OFF — pause-based
+  and soft-cap auto-flushes suppressed, the whole press is transcribed on
+  stop (tail capture kept, 20 s safety cap below the server's 30 s cap);
+  toggle and status wording now describe the real behavior
+  ("Push-to-talk recording…"). Hands-free mode is unchanged (ADR-0010).
+- **Verification:** frontend 41 passed; browser smoke C6/C9 assert the two
+  status wordings live (10/10); manual real-device PTT check remains in the
+  docs/testing.md §8 checklist (KI-004).
+- **Status:** RESOLVED (2026-11-01).
+
 ## KI-005 — RESOLVED: initial TTS fixtures unusable for ur/es
 
 - **Description:** the sandbox's default TTS voices (Chinese-oriented)

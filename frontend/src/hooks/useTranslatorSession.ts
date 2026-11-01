@@ -16,6 +16,7 @@ import {
   type CaptureHandle,
 } from '../services/audioCapture'
 import { TranslatorWsClient, type WsStatus } from '../services/wsClient'
+import { FlushTracker } from '../services/flushTracker'
 import { surfaceNoSpeechError } from '../services/noSpeechPolicy'
 import type { HelloConfig, ServerEvent, SttInfo } from '../types/protocol'
 
@@ -60,7 +61,13 @@ const ENDPOINT_MIN_SEGMENT_MS = 1_200 // never auto-flush less audio than this
 // flowing while the user keeps talking).
 const ENDPOINT_SOFT_CAP_MS = 4_500 // from here on, a micro-pause closes the segment
 const ENDPOINT_MICRO_PAUSE_MS = 300 // micro-pause that may close a ≥ soft-cap segment
-const ENDPOINT_MAX_SEGMENT_MS = 9_000 // hard cap — flush even without a pause
+const ENDPOINT_MAX_SEGMENT_MS = 9_000 // hands-free hard cap — flush even without a pause
+// Push-to-talk (hands-free OFF, BUG-002): NO auto-flush at pauses — the whole
+// press becomes one utterance that is transcribed when the user taps stop.
+// Only a generous safety cap bounds the buffer (below the server's 30 s cap,
+// so the client always cuts cleanly with trailing silence, never the server
+// mid-stream).
+const PTT_MAX_SEGMENT_MS = 20_000
 // Tail-capture window (KI-008): when stop is tapped the mic stays open this
 // much longer so the final words are padded with REAL trailing silence —
 // tapping stop the instant speech ends hard-cuts the last word against the
@@ -173,14 +180,18 @@ export function useTranslatorSession(wsUrl: string): SessionState {
   const recordingRef = useRef(false)
   const finishingRef = useRef(false)
   const endpointRef = useRef<EndpointState>(freshEndpointState())
-  /** Whether the most recent flush contained speech — gates the
-   * no_speech_detected banner (silence-drain flushes are expected, see
-   * noSpeechPolicy.ts). */
-  const lastFlushHadSpeechRef = useRef(true)
-  /** Speech flushes whose transcription (or error) has not arrived yet. The
-   * Transcribing… indicator stays up until this counter reaches zero, so
-   * overlapping flushes during continuous speech never clear it early. */
-  const pendingTranscriptionsRef = useRef(0)
+  /** BUG-002: the endpointing callbacks are created once — read the mode
+   * through a ref so toggling hands-free takes effect mid-session. */
+  const handsFreeRef = useRef(handsFree)
+  handsFreeRef.current = handsFree
+  /** BUG-001: per-utterance attribution of in-flight decodes. Each flush is
+   * registered with a client-generated id + whether it contained speech; the
+   * server echoes the id on every transcription/error, so each outcome
+   * settles exactly its own utterance (no shared-ref races). The
+   * Transcribing… indicator is DERIVED from this map — a stuck state is
+   * structurally impossible. */
+  const inFlightRef = useRef<FlushTracker>(new FlushTracker())
+  const flushSeqRef = useRef(0)
   const configRef = useRef<HelloConfig>({
     native_language: nativeLanguage,
     preferred_language: preferredLanguage,
@@ -192,14 +203,17 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     audio: AUDIO_FORMAT,
   }
 
-  /** One in-flight decode landed (transcription or error for a speech
-   * flush). Only clear the indicator when the LAST pending decode is done —
-   * flushes overlap once segments stream in every few seconds (KI-009). */
-  const settleTranscription = useCallback(() => {
-    if (pendingTranscriptionsRef.current > 0) {
-      pendingTranscriptionsRef.current -= 1
-      if (pendingTranscriptionsRef.current === 0) setTranscribing(false)
-    }
+  /** Flush the current segment with a fresh correlation id (BUG-001). The
+   * Transcribing… indicator turns on only for flushes that carried speech —
+   * silence-only drains (hands-free idle) never show it. */
+  const flushSegment = useCallback((hadSpeech: boolean) => {
+    flushSeqRef.current += 1
+    const id = `c_${String(flushSeqRef.current).padStart(4, '0')}_${Math.random()
+      .toString(36)
+      .slice(2, 8)}`
+    inFlightRef.current.register(id, hadSpeech)
+    clientRef.current?.flush(id)
+    if (hadSpeech) setTranscribing(true)
   }, [])
 
   const finalizeRecording = useCallback(async () => {
@@ -213,20 +227,13 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     if (handle) await handle.stop()
     // Final flush only when audio accumulated since the last (auto-)flush —
     // otherwise the server would answer `nothing_to_transcribe` for a
-    // pause the endpointing gate already closed.
+    // pause the endpointing gate already closed. In push-to-talk mode this
+    // IS the transcription trigger (BUG-002: flush on stop).
     if (endpointRef.current.bufferedMs > 0) {
-      lastFlushHadSpeechRef.current = endpointRef.current.speechSeen
-      clientRef.current?.flush()
-      // The utterance is now on the server — show progress until the result
-      // (or an error) arrives instead of a silent dead wait. Silence-only
-      // drains (hands-free idle) never set the indicator.
-      if (endpointRef.current.speechSeen) {
-        pendingTranscriptionsRef.current += 1
-        setTranscribing(true)
-      }
+      flushSegment(endpointRef.current.speechSeen)
     }
     endpointRef.current = freshEndpointState()
-  }, [])
+  }, [flushSegment])
 
   const stopRecording = useCallback(async () => {
     if (finishingRef.current) return // tail window already running — ignore re-taps
@@ -258,22 +265,32 @@ export function useTranslatorSession(wsUrl: string): SessionState {
           at: Date.now(),
         }
         setTranscripts((prev) => [...prev.slice(-(MAX_TRANSCRIPTS - 1)), entry])
-        settleTranscription()
+        // BUG-001: settle exactly the utterance this result belongs to —
+        // unknown ids (server auto-flush) settle nothing.
+        setTranscribing(inFlightRef.current.settle(event.id))
         return
       }
       if (event.type === 'error') {
-        // Includes no_speech_detected / stt_timeout — never leave the
-        // "Transcribing…" indicator stuck on screen. A no_speech_detected
-        // after a SILENCE-ONLY flush is expected (server VAD gate did its
-        // job on a hands-free idle drain) and stays invisible.
-        if (event.code === 'no_speech_detected' && !surfaceNoSpeechError(lastFlushHadSpeechRef.current)) {
+        // BUG-001: attribute the error to ITS flush via the echoed
+        // utterance_id — never to whichever flush happened to be last.
+        const errorId = event.utterance_id
+        const hadSpeech = errorId !== undefined ? inFlightRef.current.hadSpeech(errorId) : undefined
+        // Outcomes for silence-only flushes (VAD gate rejections, drains,
+        // backpressure drops) are expected — settle quietly, no banner.
+        if (hadSpeech === false) {
+          if (errorId !== undefined) setTranscribing(inFlightRef.current.settle(errorId))
           return
         }
-        settleTranscription()
+        // A no_speech_detected is only noteworthy when its own flush carried
+        // real speech the server did not recognize (see noSpeechPolicy.ts).
+        if (event.code === 'no_speech_detected' && !surfaceNoSpeechError(hadSpeech === true)) {
+          return
+        }
+        if (errorId !== undefined) setTranscribing(inFlightRef.current.settle(errorId))
         setError({ code: event.code, message: event.message })
       }
     },
-    [settleTranscription],
+    [],
   )
 
   // WS client lifecycle (connect on mount, clean close on unmount).
@@ -304,7 +321,9 @@ export function useTranslatorSession(wsUrl: string): SessionState {
       (recordingRef.current || transcribing)
     ) {
       if (recordingRef.current) void finalizeRecording()
-      pendingTranscriptionsRef.current = 0
+      // In-flight results are dropped server-side for closed sessions
+      // (ADR-0009) — forget them so the indicator cannot get stuck.
+      inFlightRef.current.clear()
       setTranscribing(false)
       setError({
         code: 'connection_lost',
@@ -341,6 +360,10 @@ export function useTranslatorSession(wsUrl: string): SessionState {
           setMicLevel(rms)
           // Sentence endpointing: track speech/pause from the chunk RMS and
           // flush the server buffer at every natural pause (ADR-0007).
+          // BUG-002: in push-to-talk mode (hands-free OFF) pause-based
+          // auto-flushes are SUPPRESSED — the whole press is transcribed on
+          // stop; only a generous safety cap bounds the buffer.
+          const handsFree = handsFreeRef.current
           const ep = endpointRef.current
           ep.bufferedMs += CHUNK_MS
           if (rms >= ENDPOINT_SPEECH_RMS) {
@@ -350,6 +373,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
             ep.silentMs += CHUNK_MS
           }
           const pauseClosedSentence =
+            handsFree &&
             ep.speechSeen &&
             ep.bufferedMs >= ENDPOINT_MIN_SEGMENT_MS &&
             ep.silentMs >= ENDPOINT_SILENCE_MS
@@ -357,20 +381,17 @@ export function useTranslatorSession(wsUrl: string): SessionState {
           // closes the segment — continuous speech no longer waits for a
           // full 800 ms sentence pause (or the old 20 s cap) to produce text.
           const softCapReached =
+            handsFree &&
             ep.speechSeen &&
             ep.bufferedMs >= ENDPOINT_SOFT_CAP_MS &&
             ep.silentMs >= ENDPOINT_MICRO_PAUSE_MS
-          const capReached = ep.bufferedMs >= ENDPOINT_MAX_SEGMENT_MS
+          const capReached =
+            ep.bufferedMs >= (handsFree ? ENDPOINT_MAX_SEGMENT_MS : PTT_MAX_SEGMENT_MS)
           if (pauseClosedSentence || softCapReached || capReached) {
             // Silence-only drains (cap reached, nobody spoke — hands-free
             // idle) still flush to bound the server buffer, but must not
             // show the Transcribing… indicator nor a no_speech banner.
-            lastFlushHadSpeechRef.current = ep.speechSeen
-            clientRef.current?.flush()
-            if (ep.speechSeen) {
-              pendingTranscriptionsRef.current += 1
-              setTranscribing(true)
-            }
+            flushSegment(ep.speechSeen)
             endpointRef.current = freshEndpointState()
           }
         },
@@ -390,7 +411,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     } finally {
       setStartingRecording(false)
     }
-  }, [])
+  }, [flushSegment])
 
   const toggleRecording = useCallback(() => {
     if (recordingRef.current || finishingRef.current) void stopRecording()

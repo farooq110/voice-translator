@@ -37,6 +37,9 @@ export interface PingMessage {
 export interface FlushMessage {
   v: typeof PROTOCOL_VERSION
   type: 'flush'
+  /** BUG-001: client-generated correlation id, echoed on every event/error
+   * for that flush so the client can settle exactly that utterance. */
+  utterance_id?: string
 }
 
 export type ClientMessage = HelloMessage | PingMessage | FlushMessage
@@ -51,8 +54,10 @@ export function pingMessage(ts?: number): PingMessage {
     : { v: PROTOCOL_VERSION, type: 'ping', ts }
 }
 
-export function flushMessage(): FlushMessage {
-  return { v: PROTOCOL_VERSION, type: 'flush' }
+export function flushMessage(utteranceId?: string): FlushMessage {
+  return utteranceId === undefined
+    ? { v: PROTOCOL_VERSION, type: 'flush' }
+    : { v: PROTOCOL_VERSION, type: 'flush', utterance_id: utteranceId }
 }
 
 // ---------------- server → client ----------------
@@ -91,6 +96,9 @@ export interface ErrorEvent {
   code: string
   message: string
   fatal: boolean
+  /** BUG-001: the flush this error belongs to (echoed utterance_id); absent
+   * for connection-level errors and server-initiated auto-flushes. */
+  utterance_id?: string
 }
 
 export interface PongEvent {
@@ -186,14 +194,17 @@ export function parseServerEvent(raw: string): ServerEvent {
         is_final: bool(data, 'is_final', 'transcription'),
         low_confidence: bool(data, 'low_confidence', 'transcription'),
       }
-    case 'error':
+    case 'error': {
+      const rawUtteranceId = data['utterance_id']
       return {
         v,
         type,
         code: str(data, 'code', 'error'),
         message: str(data, 'message', 'error'),
         fatal: bool(data, 'fatal', 'error'),
+        utterance_id: typeof rawUtteranceId === 'string' ? rawUtteranceId : undefined,
       }
+    }
     case 'pong':
       return { v, type, ts: num(data, 'ts', 'pong') }
     default:

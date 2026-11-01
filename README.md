@@ -15,7 +15,7 @@ the required direction, and passes every other language through untouched.
 > bounded queues, per-line transcript delete. Translation, TTS and meeting
 > integrations arrive in the next phases — see the [roadmap](#roadmap).
 
-![desktop](../download/phase2-screens/desktop.png)
+![desktop](docs/screenshots/phase2/desktop.png)
 
 ## Quick start
 
@@ -86,7 +86,7 @@ cd frontend && npm run typecheck && npm run lint && npm run test
 bash start.sh   # then:
 cd backend && uv run python scripts/e2e_synthetic_check.py --url ws://localhost:3000/ws/audio
 cd backend && uv run python scripts/silence_guard_check.py --url ws://localhost:3000/ws/audio
-node scripts/smoke_phase2.mjs               # headless browser smoke (fake mic)
+node frontend/scripts/smoke_phase2.mjs      # headless browser smoke (fake mic)
 ```
 
 **Measured on 2 vCPU (no GPU):** VAD gate ≈ 13 ms per flush (silence/noise

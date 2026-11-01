@@ -2,6 +2,47 @@
 
 All meaningful project changes. Format based on Keep a Changelog.
 
+## [0.2.2] — QA fix round — BUG-001 error attribution + BUG-002 true push-to-talk (2026-11-01)
+
+Input: independent Phase 2 QA report (verdict PASS; 2 Low defects + 3
+observations). User instruction: "See the QA report and fixed the app."
+
+### Fixed
+- **BUG-001 (KI-010, ADR-0011):** error events now carry the flush's
+  client-generated `utterance_id` (protocol v1 additive optional fields:
+  `flush.utterance_id` in, `error.utterance_id` + `transcription.id` echo
+  out). The client settles in-flight state strictly by id
+  (`FlushTracker`); the `Transcribing…` indicator is DERIVED from the
+  per-flush map, so the QA's two stuck-indicator modes (mis-attributed
+  `no_speech_detected` after a newer drain / unconditional settle for a
+  silence-drain `server_busy`) are closed by construction. Regression tests
+  cover both modes (backend 69+1xfail, frontend 41).
+- **BUG-002 (KI-011, ADR-0011):** the capture toggle now does what it says.
+  OFF = true push-to-talk: no auto-flush at pauses, the whole press is
+  transcribed when the user taps stop (700 ms tail capture kept, 20 s
+  safety cap below the server's 30 s cap). ON = hands-free, unchanged
+  (ADR-0010 endpointing). Toggle and status wording updated
+  ("Push-to-talk recording…").
+- **OBS-005 (partial):** `server_busy` messages now state that the segment
+  was dropped BY DESIGN (nothing to re-flush) and include a queue-depth
+  hint (`1/1 in flight`, `queue 16/16`); protocol spec's client obligation
+  updated accordingly.
+
+### Changed
+- `.env` untracked from git (OBS-003; content was a non-sensitive
+  `DATABASE_URL` placeholder).
+- README screenshot link fixed to the tracked
+  `docs/screenshots/phase2/` (OBS-004); `frontend/scripts/smoke_phase2.mjs`
+  re-provisioned (playwright + Chrome fake mic) and re-run live: **10/10,
+  zero console errors**; desktop + mobile screenshots committed.
+
+### Verification
+- backend `uv run pytest` → **69 passed, 1 xfailed**; frontend
+  tsc/lint/**41 tests**/build clean; live E2E synthetic **3/3**, silence
+  guard **PASS**, continuous speech **5/5** (first text 6.28 s,
+  flush→text 1.84–1.98 s); browser smoke **10/10**. `APP_VERSION` 0.2.1 →
+  0.2.2.
+
 ## [0.2.1] — Phase 2 defect round — KI-009: continuous-speech latency + newest-first transcript (2026-11-01)
 
 ### Fixed

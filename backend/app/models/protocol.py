@@ -57,10 +57,19 @@ class PingMessage(StrictModel):
 
 
 class FlushMessage(StrictModel):
-    """Request transcription of all audio buffered since the last flush."""
+    """Request transcription of all audio buffered since the last flush.
+
+    `utterance_id` (optional, BUG-001 fix): a client-generated correlation id
+    echoed on every event/error for that flush, so the client can settle
+    exactly the utterance a result belongs to. Absent on server-initiated
+    auto-flushes (the server then generates its own id).
+    """
 
     type: Literal["flush"] = "flush"
     v: Literal[PROTOCOL_VERSION]
+    utterance_id: str | None = Field(
+        default=None, pattern=r"^[A-Za-z0-9_-]{1,64}$"
+    )
 
 
 ClientMessage = Annotated[
@@ -117,6 +126,11 @@ class ErrorEvent(StrictModel):
     code: str
     message: str
     fatal: bool = False
+    """BUG-001 fix: the flush this error belongs to (client-generated
+    utterance_id echoed back), so the client can settle exactly that
+    utterance's pending state. None for connection-level errors and
+    server-initiated auto-flushes."""
+    utterance_id: str | None = None
 
 
 class PongEvent(StrictModel):

@@ -55,6 +55,14 @@ describe('client message builders', () => {
   it('builds flush', () => {
     expect(flushMessage()).toEqual({ v: PROTOCOL_VERSION, type: 'flush' })
   })
+
+  it('builds flush with a correlation id (BUG-001)', () => {
+    expect(flushMessage('c_0001_ab12cd')).toEqual({
+      v: PROTOCOL_VERSION,
+      type: 'flush',
+      utterance_id: 'c_0001_ab12cd',
+    })
+  })
 })
 
 describe('parseServerEvent', () => {
@@ -82,6 +90,23 @@ describe('parseServerEvent', () => {
     expect(err).toMatchObject({ type: 'error', code: 'x', fatal: false })
     const pong = parseServerEvent(JSON.stringify({ v: 1, type: 'pong', ts: 7 }))
     expect(pong).toMatchObject({ type: 'pong', ts: 7 })
+  })
+
+  it('parses error utterance_id when present (BUG-001) and omits it when absent', () => {
+    const attributed = parseServerEvent(
+      JSON.stringify({ v: 1, type: 'error', code: 'server_busy', message: 'm', fatal: false, utterance_id: 'c_0002_feed01' }),
+    )
+    if (attributed.type !== 'error') throw new Error('expected error event')
+    expect(attributed.utterance_id).toBe('c_0002_feed01')
+    const plain = parseServerEvent(JSON.stringify({ v: 1, type: 'error', code: 'x', message: 'y', fatal: false }))
+    if (plain.type !== 'error') throw new Error('expected error event')
+    expect(plain.utterance_id).toBeUndefined()
+    // a null id (server-generated) also parses as absent
+    const nulled = parseServerEvent(
+      JSON.stringify({ v: 1, type: 'error', code: 'x', message: 'y', fatal: false, utterance_id: null }),
+    )
+    if (nulled.type !== 'error') throw new Error('expected error event')
+    expect(nulled.utterance_id).toBeUndefined()
   })
 
   it('rejects invalid JSON', () => {
