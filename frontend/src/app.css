@@ -423,6 +423,40 @@ body {
   line-height: 1.8;
 }
 
+/* ---------- translation (Phase 3, ADR-0012) ---------- */
+
+.chip--muted {
+  background: rgb(125 125 135 / 0.14);
+  color: var(--muted);
+}
+
+.transcript-translation {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.transcript-translation__text {
+  margin: 0;
+  font-size: 0.98rem;
+  color: var(--accent);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.transcript-translation__text--rtl {
+  direction: rtl;
+  text-align: right;
+  font-size: 1.1rem;
+  line-height: 1.8;
+}
+
+.transcript-translation__meta {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
 /* ---------- badge ---------- */
 
 .badge {

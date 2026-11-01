@@ -116,9 +116,10 @@ export default function App() {
 
       <footer className="app__footer">
         <p>
-          Phase 2 — live transcription with server-side voice detection. Translation into your
-          preferred language and spoken output arrive in later phases. Works best in Chrome, Edge
-          and Safari over HTTPS.
+          Phase 3 — live transcription with translation decisions: your language is
+          translated for the other side, theirs for you, and any third language passes
+          through untouched. Spoken output arrives in later phases. Works best in Chrome,
+          Edge and Safari over HTTPS.
         </p>
       </footer>
     </div>

@@ -1,39 +1,59 @@
 # CURRENT_STATE
 
-_Last updated: 2026-11-01 — Phase 2 QA-fix round complete (BUG-001/002 + OBS-003/004/005)_
+_Last updated: 2026-11-01 — Phase 3 complete (translation decision engine, ADR-0012)_
 
 ## Phase
 
-**Phase 2 — Voice Activity Detection and Audio Optimization** — complete
-(2026-10-31), independently QA-verified (verdict PASS) and the QA fix round
-is complete (2026-11-01, ADR-0011: BUG-001 utterance-id error attribution +
-BUG-002 true push-to-talk; OBS-003/004/005 addressed). Phase 1 (+
-KI-006/007/008) and the KI-009 round remain complete. Awaiting the user's
-explicit approval for Phase 3 (master prompt §23).
+**Phase 3 — Translation Decision Engine and Bidirectional Translation** —
+complete (2026-11-01, ADR-0012; user approval "After that start the phase 3
+and complete it"). Phase 1 (+KI-006/007/008), Phase 2 (+KI-009/010/011, QA
+round) remain complete. Work is on branch `phase-3` (created from `main`
+after merging `phase-2` per the user's instruction); nothing pushed — the
+SSH key from the GitHub round was wiped by a sandbox recycle, and pushing
+waits for the user's explicit branch-named instruction (strict rule §2).
 
 ## Current task
 
-None — QA fix round finished (user instruction: "See the QA report and
-fixed the app"): BUG-001 closed by construction via protocol v1 optional
-`utterance_id` correlation + client `FlushTracker` (derived Transcribing…
-indicator); BUG-002 closed by implementing true push-to-talk when the
-toggle is OFF (flush on stop, 20 s safety cap); `server_busy` re-worded
-(dropped-by-design + queue-depth hint); `.env` untracked; smoke script
-re-provisioned and re-run 10/10 with committed screenshots. All suites
-green: backend 69+1xfail, frontend 41, live E2E 3/3 + silence guard +
-continuous speech 5/5 (first text 6.28 s). APP_VERSION 0.2.2.
+None — Phase 3 finished. The decision engine implements the master prompt
+Rules 1–4 for any configured pair; detection is "detect-first,
+pin-the-decode" (standalone detect_language + ur/hi cluster + threshold,
+then ONE pinned decode — the full auto-decode was measured unusable for
+Urdu); translation runs offline by default via CTranslate2 OPUS-MT models
+(ur↔en, es↔en) behind a provider abstraction with fake/libre/none
+alternatives; protocol v1 gained the additive `decision` field, the
+`translation` event and three utterance-scoped error codes; the UI shows a
+direction badge or an honest pass-through chip per line with RTL-aware
+translated text. All suites green: backend 128+1xfail, frontend 57,
+live translation E2E 3/3 (real speech + real MT), continuous speech 5/5
+≤ 4.0 s with the detect pass included, synthetic 3/3, silence guard PASS,
+browser smoke 10/10. APP_VERSION 0.3.0.
 
-The GitHub setup round before it: repo-local Git identity per the user's
-Repository Details, pre-publish history alignment to
-`m Farooq <khanbhi88@gmail.com>` (11 commits, repo never pushed),
-working-tree mode-bit normalization, `origin` remote configured,
-`phase-2` branch created, `download/Phase-One.zip` recreated (tag
-`phase-one-final`). The push completed via the user-provided SSH key
-(ed25519, fingerprint `SHA256:2lsCE9…`) through a paramiko
-`core.sshCommand` shim — the sandbox has no ssh binary and GitHub's
-published host-key fingerprints are pinned. Remote `main` (the web-UI
-bootstrap README commit) was superseded; `main` and `phase-2` are both
-on github.com/farooq110/voice-translator.
+## Completed work (Phase 3, 2026-11-01)
+
+- **Decision engine (ADR-0012):** pure `DecisionEngine` — Rules 1–4 for any
+  configured pair, provider-supports consulted only for would-be
+  translations; honest pass-throughs (identical config, low confidence,
+  undetected, unsupported pair, too-long text).
+- **Detection "detect-first, pin-the-decode":** standalone
+  `detect_language` (measured en 0.997 / es 0.989 / ur→hi 0.775) → ur/hi
+  cluster + 0.60 threshold + native fallback → ONE decode pinned to the
+  resolved language (full auto-decode measured unusable: `ar` p=0.97, mixed
+  scripts, 3–4× slower); 8 s detection cap (the ur greeting's first 2.5 s
+  detects `ar` p=0.93 — full-utterance context is required).
+- **Providers:** `local` offline CT2 OPUS-MT (ur↔en + es↔en, ~900 MB via
+  `scripts/download_translation_models.py`, measured EOS framing fix),
+  `fake`, `libre` (MockTransport-tested), `none`; keyless web providers
+  probed and rejected (documented).
+- **Protocol v1 additive:** `transcription.decision`, `translation` event,
+  `translation_failed/timeout/rate_limited` (utterance-scoped, non-fatal).
+- **Bounded execution:** dedicated thread, 30/min rate limit, ≤2 concurrent,
+  8 s timeout, stale-drop + cancellation, 2000-char cap.
+- **Frontend:** translation flag, direction badges / pass-through chips,
+  RTL-aware translated text, per-line error chips; 16 new tests.
+- **Verification:** backend 128+1xfail; frontend 57 + tsc/lint/build clean;
+  live translation E2E 3/3 (real speech, real MT, 144–172 ms);
+  continuous speech 5/5 ≤ 4.0 s incl. detection; synthetic 3/3; silence
+  guard PASS; browser smoke 10/10. APP_VERSION 0.3.0.
 
 ## Completed work (QA fix round, 2026-11-01)
 

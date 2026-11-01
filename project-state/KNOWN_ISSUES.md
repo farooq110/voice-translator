@@ -42,8 +42,20 @@ Format: description / reproduction / root cause / fix / verification / status.
   detection cluster when native_language ∈ {ur,hi}).
 - **Verification:** `test_urdu_forced_language_label_is_ur` passes
   deterministically (language=`ur`, p=1.00); live E2E ur→ur PASS.
-- **Status:** MITIGATED for Phase 1 production path (2026-10-31); OPEN as a
-  Phase 3 design input for the auto-detect path.
+- **Phase 3 resolution (ADR-0012, 2026-11-01):** the auto path now uses the
+  STANDALONE `detect_language` pass (measured on the ur fixture: `hi` p=0.775,
+  `ur` second — exactly this issue) and resolves it via the ur/hi cluster +
+  0.60 threshold BEFORE decoding; the decode itself stays pinned (never
+  auto-decoded — the full auto-decode measured WORSE: `ar` p=0.97 with mixed
+  Arabic/Devanagari text). The event reports the RESOLVED language;
+  `decision.detection="cluster"` records the correction. The xfail remains:
+  it documents the RAW whisper label, which is exactly what the cluster
+  normalizes. Residual corner (OPEN): Urdu speech reaching a config where
+  neither configured language is in the {ur,hi} cluster (e.g. en-native
+  listener) decodes as Hindi-orthography text as a confident third language.
+- **Status:** MITIGATED for the production paths (2026-10-31 pinned;
+  2026-11-01 cluster-resolved auto mode, ADR-0012); residual third-language
+  corner documented above.
 
 ## KI-003 — Buffered audio is discarded on disconnect
 
@@ -235,6 +247,24 @@ Format: description / reproduction / root cause / fix / verification / status.
   status wordings live (10/10); manual real-device PTT check remains in the
   docs/testing.md §8 checklist (KI-004).
 - **Status:** RESOLVED (2026-11-01).
+
+## KI-012 — OPEN: bundled local OPUS-MT models are everyday-sentence grade (Phase 3)
+
+- **Description:** the offline CTranslate2 OPUS-MT models (ur↔en, es↔en,
+  ~74 M params, Tatoeba-scale) translate short everyday sentences correctly
+  and terminate cleanly (after the measured EOS framing fix), but nuanced or
+  long Urdu→English output is weak — e.g. the greeting fixture translates as
+  "How's that okay today? Thank you very much." (meaning recognizable,
+  phrasing off).
+- **Root cause:** model scale/training data, not the pipeline — decisions,
+  limits, protocol and text handling are verified production paths
+  (docs/testing.md §10).
+- **Fix path:** the provider abstraction (ADR-0012) makes a stronger engine a
+  settings change: `TRANSLATION_PROVIDER=libre` (+ URL/key), or any future
+  provider implementation. No API keys exist in the deployment sandbox and
+  every keyless web provider was probed and blocked (MyMemory quota, Google
+  gtx bot-wall, argos index 404, ct2fast 401).
+- **Status:** OPEN (accepted for Phase 3; honest quality claims only).
 
 ## KI-005 — RESOLVED: initial TTS fixtures unusable for ur/es
 

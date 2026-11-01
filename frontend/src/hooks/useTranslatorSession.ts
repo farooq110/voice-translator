@@ -18,9 +18,22 @@ import {
 import { TranslatorWsClient, type WsStatus } from '../services/wsClient'
 import { FlushTracker } from '../services/flushTracker'
 import { surfaceNoSpeechError } from '../services/noSpeechPolicy'
-import type { HelloConfig, ServerEvent, SttInfo } from '../types/protocol'
+import {
+  applyTranslationError,
+  applyTranslationEvent,
+  isTranslationErrorCode,
+  type TranslationCarrier,
+  type TranslationErrorInfo,
+  type TranslationInfo,
+} from '../services/translations'
+import type {
+  HelloConfig,
+  ServerEvent,
+  SttInfo,
+  TranslationDecision,
+} from '../types/protocol'
 
-export interface TranscriptEntry {
+export interface TranscriptEntry extends TranslationCarrier {
   id: string
   text: string
   language: string
@@ -29,6 +42,10 @@ export interface TranscriptEntry {
   audioDurationS: number
   lowConfidence: boolean
   at: number
+  /** Phase 3 (ADR-0012): why this line will (not) be translated. */
+  decision?: TranslationDecision
+  translation?: TranslationInfo
+  translationError?: TranslationErrorInfo
 }
 
 export interface AppError {
@@ -263,6 +280,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
           audioDurationS: event.audio_duration_s,
           lowConfidence: event.low_confidence,
           at: Date.now(),
+          decision: event.decision,
         }
         setTranscripts((prev) => [...prev.slice(-(MAX_TRANSCRIPTS - 1)), entry])
         // BUG-001: settle exactly the utterance this result belongs to —
@@ -270,7 +288,23 @@ export function useTranslatorSession(wsUrl: string): SessionState {
         setTranscribing(inFlightRef.current.settle(event.id))
         return
       }
+      if (event.type === 'translation') {
+        // Phase 3 (ADR-0012): attach the translated text to ITS utterance —
+        // the line already settled its Transcribing… state.
+        setTranscripts((prev) => applyTranslationEvent(prev, event))
+        return
+      }
       if (event.type === 'error') {
+        // Utterance-scoped translation failures never touch the global
+        // banner nor the indicator (the transcription already settled it) —
+        // they are attached to the line, original text kept.
+        if (isTranslationErrorCode(event.code)) {
+          const id = event.utterance_id
+          if (id !== undefined) {
+            setTranscripts((prev) => applyTranslationError(prev, id, event.code))
+          }
+          return
+        }
         // BUG-001: attribute the error to ITS flush via the echoed
         // utterance_id — never to whichever flush happened to be last.
         const errorId = event.utterance_id

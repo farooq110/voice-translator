@@ -67,6 +67,31 @@ class Settings(BaseSettings):
     min_utterance_seconds: float = 0.2
     ws_idle_timeout_seconds: float = 180.0
 
+    # --- Translation decision engine (Phase 3, ADR-0012) ---
+    # `local`  — offline CTranslate2 OPUS-MT models under
+    #            `translation_models_dir` (provision with
+    #            backend/scripts/download_translation_models.py); no keys,
+    #            no network, text never leaves the machine.
+    # `fake`   — deterministic stub (`[fake:src→tgt] …`) for tests/demos.
+    # `libre`  — LibreTranslate HTTP API (LIBRETRANSLATE_URL + optional key).
+    # `none`   — translation disabled: no decisions, Phase 1/2 transcripts.
+    translation_provider: str = "local"
+    # `auto`  = Whisper detects the language per utterance; the decision engine
+    #           normalizes it (script inspection + ur/hi cluster, KI-002) and
+    #           gates low-confidence labels into pass-through (ADR-0012).
+    # `pinned` = assume the configured native language (Phase 1/2 behavior —
+    #           faster and deterministic, but Rule 2 can never fire).
+    translation_detect_mode: str = "auto"
+    translation_confidence_threshold: float = 0.60
+    translation_timeout_s: float = 8.0
+    translation_rate_limit_per_minute: int = 30
+    translation_max_concurrent: int = 2
+    translation_max_text_chars: int = 2000
+    translation_worker_threads: int = 1
+    translation_models_dir: str = "models/translation"
+    libretranslate_url: str = ""
+    libretranslate_api_key: str = ""
+
     # --- Sessions / security ---
     max_sessions: int = 50
     cors_origins: str = ""

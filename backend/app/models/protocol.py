@@ -107,6 +107,33 @@ class ReadyEvent(StrictModel):
     stt: SttInfo
 
 
+class TranslationDecisionInfo(StrictModel):
+    """Why this utterance will (or will not) be translated — Phase 3, ADR-0012.
+
+    `action="translate"` carries `target_language`; every `passthrough`
+    reason explains itself (third language, low confidence, unsupported pair,
+    …). `detection` records HOW `source_language` was determined:
+    `whisper` (model label), `script` (text script evidence overrode the
+    label — KI-002), `cluster` (ur/hi register collapse), `pinned` (the
+    hello config's native language) or `unknown`.
+    """
+
+    action: Literal["translate", "passthrough"]
+    reason: Literal[
+        "native_language",
+        "preferred_language",
+        "third_language",
+        "identical_config",
+        "low_confidence",
+        "undetected_language",
+        "unsupported_pair",
+        "text_too_long",
+    ]
+    source_language: str
+    target_language: str | None = None
+    detection: Literal["whisper", "cluster", "pinned", "fallback", "unknown"]
+
+
 class TranscriptionEvent(StrictModel):
     type: Literal["transcription"] = "transcription"
     v: int = PROTOCOL_VERSION
@@ -118,6 +145,11 @@ class TranscriptionEvent(StrictModel):
     processing_ms: int = Field(ge=0)
     is_final: bool = True
     low_confidence: bool = False
+    """Phase 3 (ADR-0012): present only when translation is enabled on the
+    server. `action="translate"` is followed by a `translation` event with
+    the same id; `passthrough` means NO translation will arrive — the
+    original text is final."""
+    decision: TranslationDecisionInfo | None = None
 
 
 class ErrorEvent(StrictModel):
@@ -133,6 +165,24 @@ class ErrorEvent(StrictModel):
     utterance_id: str | None = None
 
 
+class TranslationEvent(StrictModel):
+    """Translated text for the utterance with the same id (Phase 3, ADR-0012).
+
+    Arrives AFTER its `transcription` (which already carries the decision).
+    Only ever sent when the decision was `action="translate"` — original
+    pass-through audio/text never reaches a provider (master prompt Rule 4).
+    """
+
+    type: Literal["translation"] = "translation"
+    v: int = PROTOCOL_VERSION
+    id: str
+    text: str
+    source_language: str
+    target_language: str
+    provider: str
+    duration_ms: int = Field(ge=0)
+
+
 class PongEvent(StrictModel):
     type: Literal["pong"] = "pong"
     v: int = PROTOCOL_VERSION
@@ -140,7 +190,7 @@ class PongEvent(StrictModel):
 
 
 ServerEvent = Annotated[
-    Union[ReadyEvent, TranscriptionEvent, ErrorEvent, PongEvent],
+    Union[ReadyEvent, TranscriptionEvent, TranslationEvent, ErrorEvent, PongEvent],
     Field(discriminator="type"),
 ]
 
@@ -159,6 +209,8 @@ __all__ = [
     "ReadyEvent",
     "SttInfo",
     "TranscriptionEvent",
+    "TranslationDecisionInfo",
+    "TranslationEvent",
     "ValidationError",
     "parse_client_message",
 ]

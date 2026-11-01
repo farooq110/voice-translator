@@ -88,6 +88,66 @@ export interface TranscriptionEvent {
   processing_ms: number
   is_final: boolean
   low_confidence: boolean
+  /** Phase 3 (ADR-0012): present only when the server has translation
+   * enabled. `action="translate"` is followed by a `translation` event with
+   * the same id; `passthrough` means NO translation will arrive. */
+  decision?: TranslationDecision
+}
+
+// ---------------- translation decision (Phase 3, ADR-0012) ----------------
+
+export type TranslationAction = 'translate' | 'passthrough'
+
+export type TranslationReason =
+  | 'native_language'
+  | 'preferred_language'
+  | 'third_language'
+  | 'identical_config'
+  | 'low_confidence'
+  | 'undetected_language'
+  | 'unsupported_pair'
+  | 'text_too_long'
+
+export const TRANSLATION_REASONS: readonly TranslationReason[] = [
+  'native_language',
+  'preferred_language',
+  'third_language',
+  'identical_config',
+  'low_confidence',
+  'undetected_language',
+  'unsupported_pair',
+  'text_too_long',
+]
+
+export type TranslationDetection = 'whisper' | 'cluster' | 'pinned' | 'fallback' | 'unknown'
+
+const TRANSLATION_DETECTIONS: readonly TranslationDetection[] = [
+  'whisper',
+  'cluster',
+  'pinned',
+  'fallback',
+  'unknown',
+]
+
+export interface TranslationDecision {
+  action: TranslationAction
+  reason: TranslationReason
+  source_language: string
+  /** Set only for `action="translate"`. */
+  target_language?: string
+  detection: TranslationDetection
+}
+
+/** Translated text for the utterance with the same id (Phase 3). */
+export interface TranslationEvent {
+  v: number
+  type: 'translation'
+  id: string
+  text: string
+  source_language: string
+  target_language: string
+  provider: string
+  duration_ms: number
 }
 
 export interface ErrorEvent {
@@ -107,7 +167,12 @@ export interface PongEvent {
   ts: number
 }
 
-export type ServerEvent = ReadyEvent | TranscriptionEvent | ErrorEvent | PongEvent
+export type ServerEvent =
+  | ReadyEvent
+  | TranscriptionEvent
+  | TranslationEvent
+  | ErrorEvent
+  | PongEvent
 
 export class ProtocolError extends Error {
   constructor(message: string) {
@@ -151,6 +216,30 @@ function parseAudioFormat(value: unknown, ctx: string): AudioFormat {
   }
 }
 
+function parseDecision(value: unknown, ctx: string): TranslationDecision {
+  if (!isRecord(value)) throw new ProtocolError(`${ctx}: decision must be an object`)
+  const action = str(value, 'action', ctx)
+  if (action !== 'translate' && action !== 'passthrough') {
+    throw new ProtocolError(`${ctx}: invalid decision action "${action}"`)
+  }
+  const reason = str(value, 'reason', ctx)
+  if (!TRANSLATION_REASONS.includes(reason as TranslationReason)) {
+    throw new ProtocolError(`${ctx}: invalid decision reason "${reason}"`)
+  }
+  const detection = str(value, 'detection', ctx)
+  if (!TRANSLATION_DETECTIONS.includes(detection as TranslationDetection)) {
+    throw new ProtocolError(`${ctx}: invalid decision detection "${detection}"`)
+  }
+  const target = value['target_language']
+  return {
+    action,
+    reason: reason as TranslationReason,
+    source_language: str(value, 'source_language', ctx),
+    target_language: typeof target === 'string' ? target : undefined,
+    detection: detection as TranslationDetection,
+  }
+}
+
 /** Validate and narrow one inbound server frame (a JSON text message). */
 export function parseServerEvent(raw: string): ServerEvent {
   let data: unknown
@@ -181,7 +270,8 @@ export function parseServerEvent(raw: string): ServerEvent {
         },
       }
     }
-    case 'transcription':
+    case 'transcription': {
+      const rawDecision = data['decision']
       return {
         v,
         type,
@@ -193,6 +283,24 @@ export function parseServerEvent(raw: string): ServerEvent {
         processing_ms: num(data, 'processing_ms', 'transcription'),
         is_final: bool(data, 'is_final', 'transcription'),
         low_confidence: bool(data, 'low_confidence', 'transcription'),
+        // null (translation disabled server-side) and absent both mean "no
+        // decision" — tolerate both shapes.
+        decision:
+          rawDecision === undefined || rawDecision === null
+            ? undefined
+            : parseDecision(rawDecision, 'transcription.decision'),
+      }
+    }
+    case 'translation':
+      return {
+        v,
+        type,
+        id: str(data, 'id', 'translation'),
+        text: str(data, 'text', 'translation'),
+        source_language: str(data, 'source_language', 'translation'),
+        target_language: str(data, 'target_language', 'translation'),
+        provider: str(data, 'provider', 'translation'),
+        duration_ms: num(data, 'duration_ms', 'translation'),
       }
     case 'error': {
       const rawUtteranceId = data['utterance_id']

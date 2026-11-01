@@ -46,6 +46,7 @@ def _tight_settings(**overrides: int) -> Settings:
     return Settings(
         stt_max_pending_per_session=overrides.get("stt_max_pending_per_session", 4),
         stt_max_queue_depth=overrides.get("stt_max_queue_depth", 16),
+        translation_provider="none",  # Phase 1/2 semantics for these tests
     )
 
 

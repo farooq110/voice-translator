@@ -73,11 +73,15 @@ generates its own id (`u_NNNN_hex`).
 | `processing_ms` | server wall time from flush receipt to event send |
 | `is_final` | always `true` in v1 (partials come with streaming in a later phase) |
 | `low_confidence` | `language_probability < LOW_CONFIDENCE_THRESHOLD` (default 0.60) — always `false` on the pinned path |
+| `decision` | **Phase 3 (ADR-0012, optional — present only when server translation is enabled):** `{action, reason, source_language, target_language?, detection}`. `action="translate"` is followed by a `translation` event with the same id; `action="passthrough"` means NO translation will arrive (the original is final). Reasons: `native_language`, `preferred_language`, `third_language`, `identical_config`, `low_confidence`, `undetected_language`, `unsupported_pair`, `text_too_long`. `detection` records how `source_language` was resolved: `whisper` (model label), `cluster` (ur/hi register collapse, KI-002), `pinned` (hello config), `fallback` (uncertain → native pin), `unknown` |
 
-Phase 1+ semantics: every received utterance is transcribed with the STT
-language **pinned** to `hello.config.native_language` (the translator user's
-selection is authoritative; auto-detection mislabels short utterances and
-hallucinates on noise — KI-006). Since Phase 2 (ADR-0009) every flush first
+Phase 1–2 semantics: the STT language was **pinned** to
+`hello.config.native_language` (KI-006). **Phase 3 (ADR-0012) default `auto`
+mode:** a standalone `detect_language` pass resolves the spoken language
+(ur/hi cluster + 0.60 confidence gate), the SINGLE decode is then pinned to
+the resolved language (never auto-decoded — KI-002/KI-006), and the event
+reports the RESOLVED language. `translation_detect_mode=pinned` restores the
+Phase 1/2 behavior (the configured native language, probability 1.0). Since Phase 2 (ADR-0009) every flush first
 crosses the **server-side Silero VAD pipeline**:
 
 1. *Gate* — no recognizable speech (< `VAD_MIN_SPEECH_MS`) →
@@ -89,10 +93,35 @@ crosses the **server-side Silero VAD pipeline**:
    texts are joined in order into one `transcription` event.
 
 Segments that look like classic no-speech hallucinations are additionally
-dropped by the STT provider (KI-006/ADR-0007). The translation decision
-engine (Phase 3) will use `language` + `low_confidence` + the hello config to
-decide translate vs pass-through for **both** participants; v1 already
-carries all required signals.
+dropped by the STT provider (KI-006/ADR-0007).
+
+### 3a. Translation decision + `translation` event (Phase 3, ADR-0012)
+
+After every transcription the decision engine applies the master prompt's
+rules to the resolved detection:
+
+| Detected language | Result |
+| --- | --- |
+| native (e.g. `ur`) | `translate` → preferred (`en`) — Rule 1 |
+| preferred (e.g. `en`) | `translate` → native (`ur`) — Rule 2 |
+| any third language (e.g. `es`, `ar`) | `passthrough` — original kept, provider never called — Rule 3 |
+
+A `translate` decision is executed inside bounded limits (sliding-window 30
+translations/min, ≤2 concurrent, 8 s timeout, dedicated worker thread) and
+answered by a `translation` event:
+
+```json
+{"v":1,"type":"translation","id":"c_0001_ab12cd","text":"Hello, how are you?",
+ "source_language":"ur","target_language":"en","provider":"local-opus-mt","duration_ms":144}
+```
+
+`id` is the transcription's id (the echoed `utterance_id`). Provider
+failures/timeouts/rate-limits arrive instead as non-fatal `error` events
+(below) — the client keeps the original text and shows a per-line warning.
+The default `local` provider translates OFFLINE (CTranslate2 OPUS-MT models
+under `models/translation/`); `libre` sends transcript TEXT (never audio) to
+the configured LibreTranslate instance; `fake` (deterministic stub) and
+`none` (no decisions) complete the settings matrix.
 
 **Backpressure (ADR-0009):** at most `STT_MAX_PENDING_PER_SESSION` (4)
 utterances per session and `STT_MAX_QUEUE_DEPTH` (16) globally are admitted
@@ -131,6 +160,9 @@ server-initiated auto-flushes.
 | `server_busy` | no | **Phase 2 backpressure (ADR-0009):** per-session or global STT admission cap reached — the buffered audio was consumed and DROPPED by design (nothing to re-flush); message includes a queue-depth hint (OBS-005) |
 | `stt_timeout` | no | inference exceeded `STT_TIMEOUT_SECONDS` |
 | `stt_error` | no | provider failure (connection stays open) |
+| `translation_failed` | no | **Phase 3:** translation provider error — original transcript kept (utterance-scoped) |
+| `translation_timeout` | no | **Phase 3:** translation exceeded `TRANSLATION_TIMEOUT_S` — original kept |
+| `translation_rate_limited` | no | **Phase 3:** sliding-window rate limit reached — original kept |
 
 Fatal errors are followed by a WebSocket close (1008 policy violation, 1013
 capacity, 1001 idle).
@@ -144,6 +176,11 @@ capacity, 1001 idle).
 - Send `flush` with a unique client-generated `utterance_id` (ADR-0011) and
   settle in-flight state strictly by the echoed id — never attribute an
   outcome to a newer flush.
+- Treat `translation` events as updates to the utterance with the same id;
+  a `passthrough` decision means NO translation will ever arrive for that
+  line; on `translation_failed` / `translation_timeout` /
+  `translation_rate_limited` keep the original text and surface a per-line
+  warning (never re-flush, never re-request — ADR-0012).
 - On `server_busy`, do NOT re-flush: that segment was dropped by design —
   keep speaking; the next segment is admitted normally (the reference client
   surfaces it as a non-fatal notice; audio chunks keep flowing).

@@ -135,3 +135,105 @@ describe('parseServerEvent', () => {
     ).toThrow(ProtocolError)
   })
 })
+
+describe('translation events (Phase 3, ADR-0012)', () => {
+  const TRANSLATION = {
+    v: 1,
+    type: 'translation',
+    id: 'c_0001_dead01',
+    text: 'Hello world',
+    source_language: 'ur',
+    target_language: 'en',
+    provider: 'local-opus-mt',
+    duration_ms: 312,
+  }
+
+  it('parses a translation event', () => {
+    const event = parseServerEvent(JSON.stringify(TRANSLATION))
+    if (event.type !== 'translation') throw new Error('expected translation event')
+    expect(event.provider).toBe('local-opus-mt')
+    expect(event.duration_ms).toBe(312)
+    expect(event.source_language).toBe('ur')
+    expect(event.target_language).toBe('en')
+  })
+
+  it('parses a transcription WITHOUT a decision as decision=undefined', () => {
+    const event = parseServerEvent(JSON.stringify(TRANSCRIPTION))
+    expect(event.type === 'transcription' && event.decision).toBeUndefined()
+  })
+
+  it('parses an optional translate decision', () => {
+    const event = parseServerEvent(
+      JSON.stringify({
+        ...TRANSCRIPTION,
+        decision: {
+          action: 'translate',
+          reason: 'native_language',
+          source_language: 'ur',
+          target_language: 'en',
+          detection: 'cluster',
+        },
+      }),
+    )
+    expect(
+      event.type === 'transcription' && event.decision?.target_language,
+    ).toBe('en')
+    expect(event.type === 'transcription' && event.decision?.detection).toBe('cluster')
+  })
+
+  it('parses an optional passthrough decision without target', () => {
+    const event = parseServerEvent(
+      JSON.stringify({
+        ...TRANSCRIPTION,
+        decision: {
+          action: 'passthrough',
+          reason: 'third_language',
+          source_language: 'es',
+          detection: 'whisper',
+        },
+      }),
+    )
+    expect(
+      event.type === 'transcription' && event.decision?.action,
+    ).toBe('passthrough')
+    expect(
+      event.type === 'transcription' && event.decision?.target_language,
+    ).toBeUndefined()
+  })
+
+  it('rejects invalid decision fields', () => {
+    expect(() =>
+      parseServerEvent(
+        JSON.stringify({
+          ...TRANSCRIPTION,
+          decision: { action: 'maybe', reason: 'native_language', source_language: 'ur', detection: 'whisper' },
+        }),
+      ),
+    ).toThrow(ProtocolError)
+    expect(() =>
+      parseServerEvent(
+        JSON.stringify({
+          ...TRANSCRIPTION,
+          decision: { action: 'translate', reason: 'nonsense', source_language: 'ur', target_language: 'en', detection: 'whisper' },
+        }),
+      ),
+    ).toThrow(ProtocolError)
+    expect(() =>
+      parseServerEvent(
+        JSON.stringify({
+          ...TRANSCRIPTION,
+          decision: { action: 'translate', reason: 'native_language', source_language: 'ur', target_language: 'en', detection: 'telepathy' },
+        }),
+      ),
+    ).toThrow(ProtocolError)
+  })
+
+  it('rejects translation events with bad fields', () => {
+    const missing = { ...TRANSLATION }
+    delete (missing as Record<string, unknown>)['target_language']
+    expect(() => parseServerEvent(JSON.stringify(missing))).toThrow(ProtocolError)
+    expect(() =>
+      parseServerEvent(JSON.stringify({ ...TRANSLATION, duration_ms: 'fast' })),
+    ).toThrow(ProtocolError)
+  })
+})

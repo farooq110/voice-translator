@@ -19,11 +19,21 @@ Invariants enforced here:
 - admission control bounds decode work globally and per session — overflow
   is answered with a non-fatal `server_busy` error (backpressure), never
   queued without limit;
-- STT is pinned to the hello config's `native_language` (KI-006: the user's
-  selection is authoritative; auto-detect mislabels short utterances);
+- STT language: Phase 1/2 pinned the hello config's `native_language`
+  (KI-006). Phase 3 (ADR-0012) decodes with AUTOMATIC detection by default
+  (`translation_detect_mode="auto"`) so the translation decision engine can
+  apply the master prompt rules to BOTH directions; the detection is
+  normalized (script inspection + ur/hi cluster + confidence gate, KI-002)
+  before any decision. `"pinned"` restores the Phase 1/2 behavior;
 - hallucination-only results (empty after the no-speech filter) are reported
   as `no_speech_detected`, never as an empty transcription;
-- results for closed/stale sessions are dropped, never delivered.
+- results for closed/stale sessions are dropped, never delivered;
+- Phase 3 (ADR-0012): every transcription carries a `decision`
+  (translate/passthrough + reason). Only `translate` decisions reach the
+  translation provider — bounded by rate limit, concurrency cap and timeout;
+  failures surface as non-fatal, utterance-scoped errors and the original
+  transcript is kept untouched. Pass-through NEVER calls the provider
+  (master prompt Rules 3+4).
 """
 
 from __future__ import annotations
@@ -55,10 +65,19 @@ from ..models.protocol import (
     ReadyEvent,
     SttInfo,
     TranscriptionEvent,
+    TranslationDecisionInfo,
+    TranslationEvent,
     parse_client_message,
 )
 from ..sessions.manager import Session, SessionManager
 from ..stt.base import STTProvider, TranscriptionResult
+from ..translation import TranslationService
+from ..translation.decision import (
+    DETECTION_PINNED,
+    DetectionResult,
+    TranslationDecision,
+    primary_subtag,
+)
 from .backpressure import SttQueue
 
 logger = logging.getLogger(__name__)
@@ -83,6 +102,7 @@ class _Connection:
         executor: ThreadPoolExecutor,
         vad: UtterancePlanner,
         stt_queue: SttQueue,
+        translator: TranslationService | None = None,
     ) -> None:
         self.websocket = websocket
         self.settings = settings
@@ -91,17 +111,24 @@ class _Connection:
         self.executor = executor
         self.vad = vad
         self.stt_queue = stt_queue
+        self.translator = translator
         self.hello_done = False
         self.closed = False
         self._send_lock = asyncio.Lock()
         self._pending: set[asyncio.Task[None]] = set()
+        # Phase 3: in-flight translations are tracked so close can cancel
+        # them (no outdated work, no sends on a dead socket).
+        self._translation_tasks: set[asyncio.Task[None]] = set()
         self._max_buffer_bytes = (
             int(settings.max_utterance_seconds * settings.audio_sample_rate) * 2
         )
 
     # ------------------------------------------------------------------ out
 
-    async def _send(self, event: ReadyEvent | TranscriptionEvent | ErrorEvent | PongEvent) -> None:
+    async def _send(
+        self,
+        event: ReadyEvent | TranscriptionEvent | TranslationEvent | ErrorEvent | PongEvent,
+    ) -> None:
         if self.closed:
             return
         async with self._send_lock:
@@ -297,10 +324,10 @@ class _Connection:
     def _language_hint(self) -> str | None:
         """Primary subtag of the configured native language ("ur-PK" → "ur").
 
-        The translator user's selection is authoritative for their own mic
-        audio (Phase 1: only their microphone is streamed). Returns None when
-        no valid hello config is available — STT then falls back to auto
-        detection instead of guessing wrong.
+        The default STT language (pinned mode + translation-disabled path,
+        KI-006/ADR-0006). In auto mode the decision engine replaces it with
+        the resolved detection language before the decode. Returns None when
+        no valid hello config is available.
         """
         config = self.session.config
         if config is None or not config.native_language:
@@ -311,7 +338,17 @@ class _Connection:
     async def _transcribe_and_deliver(self, audio: bytes, utterance_id: str) -> None:
         loop = asyncio.get_running_loop()
         started = time.perf_counter()
+        config = self.session.config
+        auto_mode = (
+            self.translator is not None
+            and self.translator.enabled
+            and self.translator.detect_mode == "auto"
+            and config is not None
+        )
+        # Pinned default (KI-006): the configured native language. In auto
+        # mode this is REPLACED below by the resolved detection language.
         hint = self._language_hint()
+        detection: DetectionResult | None = None
         try:
             # Phase 2 VAD pipeline (gate → trim → split), CPU work off-loop.
             plan = await asyncio.wait_for(
@@ -334,6 +371,31 @@ class _Connection:
                     utterance_id=utterance_id,
                 )
                 return
+
+            # Phase 3 (ADR-0012 v2): standalone detect pass, then ONE decode
+            # pinned to the resolved language — never a full auto-decode
+            # (KI-002/KI-006: auto decode mislabels Hindustani and is 3–4×
+            # slower; the standalone detector + cluster/threshold rules are).
+            if auto_mode and self.translator is not None:
+                raw_label, raw_prob = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        self.executor,
+                        lambda: self.stt.detect_pcm(
+                            audio, sample_rate=self.settings.audio_sample_rate
+                        ),
+                    ),
+                    timeout=self.settings.stt_timeout_seconds,
+                )
+                assert config is not None
+                detection = self.translator.resolve_detection(
+                    raw_label, raw_prob, native_language=config.native_language
+                )
+                hint = detection.language
+                logger.info(
+                    "ws.detect session_id=%s id=%s raw=%s p=%.2f resolved=%s source=%s",
+                    self.session.id, utterance_id, raw_label, raw_prob,
+                    detection.language, detection.source,
+                )
 
             result: TranscriptionResult = await asyncio.wait_for(
                 self._decode_plan(plan, hint),
@@ -391,15 +453,60 @@ class _Connection:
                 self.session.id, utterance_id, len(plan.chunks), plan.dropped_s,
             )
 
+        # Phase 3 (ADR-0012): decide translate vs pass-through for this
+        # utterance. Pure logic — no provider call happens here (Rules 3+4).
+        decision: TranslationDecision | None = None
+        if self.translator is not None and config is not None:
+            if detection is None:
+                if self.translator.enabled:
+                    # Pinned mode: the user's selection is authoritative.
+                    detection = DetectionResult(
+                        primary_subtag(config.native_language), 1.0, DETECTION_PINNED
+                    )
+                else:
+                    detection = None
+            if detection is not None:
+                decision = self.translator.decide_from(
+                    detection,
+                    text=result.text,
+                    native_language=config.native_language,
+                    preferred_language=config.preferred_language,
+                )
+
+        # In auto mode the event reports the RESOLVED language (the raw
+        # whisper label — e.g. `hi` for Urdu speech, KI-002 — lives in the
+        # server log and in decision.detection).
+        language_for_event = detection.language if detection is not None else result.language
+        probability_for_event = (
+            detection.probability if detection is not None else result.language_probability
+        )
+
         event = TranscriptionEvent(
             id=utterance_id,
             text=result.text,
-            language=result.language,
-            language_probability=round(result.language_probability, 4),
+            language=language_for_event,
+            language_probability=round(probability_for_event, 4),
             audio_duration_s=round(result.audio_duration_s, 2),
             processing_ms=processing_ms,
-            low_confidence=self.stt.is_low_confidence(result.language_probability),
+            low_confidence=self.stt.is_low_confidence(probability_for_event),
+            decision=(
+                TranslationDecisionInfo(
+                    action=decision.action,
+                    reason=decision.reason,
+                    source_language=decision.source_language,
+                    target_language=decision.target_language,
+                    detection=decision.detection,
+                )
+                if decision is not None
+                else None
+            ),
         )
+        if decision is not None:
+            logger.info(
+                "ws.decision session_id=%s id=%s action=%s reason=%s src=%s tgt=%s detection=%s",
+                self.session.id, utterance_id, decision.action, decision.reason,
+                decision.source_language, decision.target_language, decision.detection,
+            )
         logger.info(
             "ws.transcription session_id=%s id=%s hint=%s language=%s prob=%.2f duration_s=%.2f processing_ms=%d chars=%d",
             self.session.id, utterance_id, hint, event.language, event.language_probability,
@@ -407,6 +514,66 @@ class _Connection:
         )
         logger.debug("ws.transcript session_id=%s text=%r", self.session.id, event.text)
         await self._send(event)
+
+        if (
+            decision is not None
+            and decision.action == "translate"
+            and decision.target_language is not None
+        ):
+            task = asyncio.create_task(
+                self._translate_and_deliver(utterance_id, result.text, decision)
+            )
+            self._translation_tasks.add(task)
+            task.add_done_callback(self._translation_tasks.discard)
+
+    async def _translate_and_deliver(
+        self, utterance_id: str, text: str, decision: TranslationDecision
+    ) -> None:
+        """Run one bounded translation (Phase 3) and deliver the outcome.
+
+        The provider call happens inside the TranslationService (rate limit,
+        concurrency cap, timeout); failures become non-fatal, utterance-
+        scoped errors and the original transcript is never touched.
+        """
+        assert self.translator is not None and decision.target_language is not None
+        outcome = await self.translator.translate(
+            text=text,
+            source_language=decision.source_language,
+            target_language=decision.target_language,
+        )
+        if self.closed or self.session.closed:
+            logger.debug(
+                "ws.translation_stale session_id=%s id=%s status=%s dropped",
+                self.session.id, utterance_id, outcome.status,
+            )
+            return
+        if outcome.status == "ok":
+            await self._send(
+                TranslationEvent(
+                    id=utterance_id,
+                    text=outcome.text,
+                    source_language=decision.source_language,
+                    target_language=decision.target_language,
+                    provider=outcome.provider,
+                    duration_ms=outcome.duration_ms,
+                )
+            )
+            return
+        messages = {
+            "failed": f"Translation failed ({outcome.error_message or 'provider error'}) — the original transcript is kept.",
+            "timeout": f"Translation took too long and was skipped — the original transcript is kept.",
+            "rate_limited": "Translation rate limit reached — the original transcript is kept.",
+        }
+        codes = {
+            "failed": "translation_failed",
+            "timeout": "translation_timeout",
+            "rate_limited": "translation_rate_limited",
+        }
+        await self.send_error(
+            codes[outcome.status],
+            messages[outcome.status],
+            utterance_id=utterance_id,
+        )
 
     async def _decode_plan(
         self, plan: UtterancePlan, hint: str | None
@@ -472,6 +639,7 @@ async def audio_socket(websocket: WebSocket) -> None:
         executor=executor,
         vad=vad,
         stt_queue=stt_queue,
+        translator=getattr(websocket.app.state, "translator", None),
     )
     logger.info("ws.open session_id=%s", session.id)
 
@@ -504,6 +672,8 @@ async def audio_socket(websocket: WebSocket) -> None:
         pass
     finally:
         conn.closed = True
+        for task in list(conn._translation_tasks):
+            task.cancel()  # cancellation of outdated requests (prompt §10/§15)
         sessions.remove(session.id)
         logger.info(
             "ws.close session_id=%s utterances=%d leftover_bytes=%d",

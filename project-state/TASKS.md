@@ -86,9 +86,24 @@ fixes local to the Phase 2 code.
 | QA-06 | Re-verification: backend 69 passed + 1 xfail; frontend tsc/lint/41 tests/build clean; live E2E 3/3 + silence guard PASS + continuous speech 5/5 (first text 6.28 s); docs: ADR-0011, protocol spec, testing.md, KI-010/011, CHANGELOG 0.2.2, APP_VERSION 0.2.2 | DONE |
 | QA-07 | OBS-005 remainder (WS origin allow-listing, authentication) — stays Phase 10 per the audit and docs | DEFERRED (Phase 10) |
 
-## Phase 3+ — see `prompt.md` section 17
+## Phase 3 — Translation Decision Engine and Bidirectional Translation — COMPLETE
 
-Translation decision engine (P3), TTS + playback (P4), two-person MVP (P5),
-mobile compatibility (P6), Zoom (P7), extension (P8), more apps (P9),
-production (P10). All `TODO` and **blocked until the respective phase is
-approved**.
+Approval: user message "After that start the phase 3 and complete it"
+(2026-11-01) — explicit approval per master prompt §23.
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P3-01 | Decision engine (pure, ADR-0012): master prompt Rules 1–4 for any pair — native→preferred, preferred→native, third-language pass-through with NO provider call, identical-config, low-confidence/undetected/unsupported/too-long honest pass-throughs; 17 unit tests | DONE |
+| P3-02 | Detection architecture "detect-first, pin-the-decode": standalone `detect_language` pass (measured: en 0.997 / es 0.989 / ur→hi 0.775 = KI-002) + ur/hi cluster + 0.60 threshold + native fallback; ONE decode pinned to the resolved language (never auto-decoded — auto measured unusable: `ar` p=0.97, mixed scripts, 3–4× slower); 8 s detection cap (greeting-prefix finding) | DONE |
+| P3-03 | Provider abstraction + 3 implementations: `local` CT2 OPUS-MT (ur↔en + es↔en offline, download script, measured EOS framing fix), `fake` (deterministic), `libre` (httpx + MockTransport-tested); keyless web providers probed and rejected (MyMemory quota / Google bot-wall / argos 404 / ct2fast 401) — documented | DONE |
+| P3-04 | Protocol v1 additive: `transcription.decision` (action/reason/source/target/detection), `translation` event, 3 utterance-scoped non-fatal error codes (`translation_failed/timeout/rate_limited`); client tolerates `decision: null` | DONE |
+| P3-05 | Bounded execution: dedicated worker thread, sliding-window rate limit 30/min, ≤2 concurrent, 8 s timeout, stale-drop on close + task cancellation, text cap 2000 chars; Unicode/RTL never rewritten | DONE |
+| P3-06 | Frontend: `VITE_FEATURE_TRANSLATION` flag, per-line direction badge / pass-through chips, RTL-aware translated text, per-line error chips; immutable update-by-id (`services/translations.ts`); protocol parser (null-tolerant) + 10 service tests + 7 parser tests | DONE |
+| P3-07 | Verification: backend **128 passed + 1 xfail** (incl. `translation_real` — real ur→en/en→ur through CT2 models); frontend tsc/lint/**57 tests**/build clean; live `e2e_translation_check.py` **3/3** (Rules 1–3 with real MT); continuous speech **5/5 ≤ 4.0 s** with the detect pass; synthetic 3/3; silence guard PASS; browser smoke **10/10** | DONE |
+| P3-08 | Docs: ADR-0012; protocol spec §3a; testing.md §2/§3/§10; .env.example; README (status/architecture/limitations); KI-002 update + KI-012; DECISIONS D-014; CHANGELOG 0.3.0; CURRENT_STATE; APP_VERSION 0.3.0 | DONE |
+
+## Phase 4+ — see `prompt.md` section 17
+
+TTS + playback (P4), two-person MVP (P5), mobile compatibility (P6), Zoom
+(P7), extension (P8), more apps (P9), production (P10). All `TODO` and
+**blocked until the respective phase is approved**.

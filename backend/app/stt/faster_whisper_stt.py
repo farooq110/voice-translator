@@ -73,6 +73,14 @@ DEAD_AUDIO_PEAK_THRESHOLD = 1e-4
 # Costs nothing (zeros) and is applied after the dead-audio gate.
 EDGE_PAD_S = 0.25
 
+# Language-detection cap (ADR-0012 v2): detection runs on at most the first
+# 8 s. Full-utterance context matters — the FIRST words of an Urdu greeting
+# ("Assalam-o-Alaikum") are Arabic-like and detect `ar` p=0.93 on a 2.5 s
+# prefix, while the full utterance correctly detects the Hindustani register
+# (`hi` p≈0.78 → ur/hi cluster → ur). 8 s bounds the worst case without
+# touching the typical ≤4.5 s endpointed segment.
+DETECT_MAX_SECONDS = 8.0
+
 
 class FasterWhisperSTT(STTProvider):
     name = "faster-whisper"
@@ -196,6 +204,40 @@ class FasterWhisperSTT(STTProvider):
             language_probability=probability,
             audio_duration_s=duration_s,
         )
+
+    def detect_pcm(
+        self,
+        pcm16: bytes,
+        *,
+        sample_rate: int,
+        channels: int = 1,
+    ) -> tuple[str | None, float]:
+        """Standalone language detection (ADR-0012 v2) — one encoder-only pass.
+
+        Measured on the fixtures (small/int8, 2 vCPU): en p=0.997, es p=0.989,
+        ur→hi p=0.775 (the documented KI-002 confusion; the decision engine's
+        ur/hi cluster resolves it). ~1.5 s per pass on this hardware.
+        """
+        self.ensure_loaded()
+        model = self._model
+        assert model is not None, "ensure_loaded() must initialize the model"
+        audio = pcm16_bytes_to_float32(pcm16, sample_rate=sample_rate, channels=channels)
+        if audio.size == 0 or float(np.abs(audio).max()) < DEAD_AUDIO_PEAK_THRESHOLD:
+            return None, 0.0
+        # Bound the detection pass to the first ~2.5 s: the label quality on
+        # short clips is the documented KI-002 behavior anyway (ur → `hi`,
+        # p≈0.70–0.78, resolved by the ur/hi cluster), and capping the
+        # mel+encoder input keeps flush→text inside the ADR-0010 latency
+        # budget for continuous speech.
+        max_samples = int(DETECT_MAX_SECONDS * 16_000)
+        if audio.size > max_samples:
+            audio = audio[:max_samples]
+        with self._infer_lock:
+            result = model.detect_language(audio)
+        # faster-whisper returns (language, probability, ranked_candidates).
+        language = result[0]
+        probability = float(result[1] or 0.0)
+        return language, probability
 
     def _run_transcribe(
         self,

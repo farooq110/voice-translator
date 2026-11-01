@@ -41,9 +41,10 @@ cd backend && HF_HOME=../models/huggingface uv run python scripts/bench_vad.py
 node frontend/scripts/smoke_phase2.mjs
 ```
 
-## 2. Backend test suite — actual result (2026-11-01, after ADR-0011)
+## 2. Backend test suite — actual result (2026-11-01, after ADR-0012)
 
-`uv run pytest` → **69 passed, 1 xfailed** in ~23 s (63 unit + 6 real-model).
+`uv run pytest` → **128 passed, 1 xfailed** in ~27–202 s (unit + real-model +
+real-MT; the spread is the real-translation class loading CT2 models).
 
 | Area | Tests | Notes |
 | --- | --- | --- |
@@ -56,6 +57,10 @@ node frontend/scripts/smoke_phase2.mjs
 | VAD real Silero (not mocked) | 5 | fixture detected+trimmed, silence gated, low-level noise gated, two bursts segmented, disabled = exact pass-through |
 | WS VAD + backpressure (fakes) | 8 | **gate rejects silence BEFORE STT (0 calls)**, **gate rejection echoes the client `utterance_id` (BUG-001)**, trim delivers shorter audio + honest duration, split joins texts in order, per-session `server_busy` (echoed id + **dropped-by-design wording + queue-depth hint**), global `server_busy` across sessions (echoed id + `queue 1/1`), slot released on STT failure, health exposes vad/queue |
 | Real-model STT (not mocked) | 6 + 1 xfail | see §4; new: **full WS pipeline — real Silero gate + real Whisper over `/ws/audio` (ur → Arabic script)** |
+| Translation decision engine (pure) | 17 | ADR-0012 v2: rules 1–3 + identical/low-confidence/undetected/unsupported/too-long, **detect resolution — measured KI-002 signature (`hi` p=0.775 → cluster → ur)**, fallback gating, regional subtags, Arabic stays third-language |
+| Translation providers | 11 | fake marker/failure/pairs, **LibreTranslate over `httpx.MockTransport` — real request/response semantics (200/400/5xx/429/malformed/network/api-key)**, local pair discovery, **`translation_real`: real ur→en + en→ur through the downloaded CT2 models (script-verified output)** |
+| Translation service (async) | 9 | ok/failed/timeout/rate-limited outcomes, sliding-window limiter, disabled service, describe() |
+| WS translation flow (fakes) | 12 | **decision on transcription + `translation` event round-trip (both directions)**, **third language passes through with ZERO provider calls**, low-confidence gating, identical config, **KI-002 cluster case at the WS level**, uncertain fallback pins native + gates, unsupported pair, provider failure → utterance-scoped non-fatal error, rate limit, disabled = no `decision` field, server-generated ids translated |
 
 The 1 xfail is **deliberate and documented**: Urdu language *label* detection
 **with automatic detection** (see KI-002). It is a tracked known issue, not a
@@ -70,12 +75,11 @@ bypassed per-app overrides in tests.
 
 - `tsc --noEmit` (strict, `noUncheckedIndexedAccess`) → clean.
 - `eslint . --max-warnings 0` → clean.
-- `vitest run` → **41 passed** (protocol parser 12 — incl. the BUG-001
-  `utterance_id` builder/parser cases, languages 5, WS client 10 — fake
-  WebSocket, fake timers, reconnect/backoff/heartbeat, uplink-stall chunk
-  dropping, **correlation id on flush**, flags 7, no-speech policy 2,
-  **flushTracker 5 — both QA mis-attribution modes**).
-- `vite build` → ✓ (`index.html` 1.2 kB, JS 244 kB / 77 kB gzip, CSS 6.5 kB).
+- `vitest run` → **57 passed** (protocol parser 19 — incl. the ADR-0012
+  decision/`translation`-event cases, languages 5, WS client 10, flags 7,
+  no-speech policy 2, flushTracker 5, **translations 10 — event/error
+  attribution by utterance id, badge text map, error-code policy**).
+- `vite build` → ✓ (`index.html` 1.2 kB, JS 248 kB / 78 kB gzip, CSS 6.9 kB).
 
 ## 4. Real STT validation — actual results (2026-10-31, after ADR-0007: model `small`, beam5, VAD)
 
@@ -313,3 +317,27 @@ Safari, background tab, lock screen, interruptions.
 - Multi-participant sessions, translation, TTS, meeting integrations — later
   phases by design.
 - No coverage % is claimed (not measured).
+
+## 10. Phase 3 — translation decision engine — actual results (2026-11-01, ADR-0012)
+
+**Design verified live: detect-first, pin-the-decode.** Whisper full
+auto-decode was measured UNUSABLE for Urdu (`ar` label p=0.97, mixed
+Arabic/Devanagari text, 3–4× slower); the standalone `detect_language` pass
+plus the ur/hi cluster + threshold resolution restores correctness while
+keeping every decode pinned (Phase 1/2 text quality and speed).
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Rule 1 — ur speech → en | **PASS** | decision `translate/native_language`, detection `cluster` (raw label `hi` p=0.78 — KI-002 resolved), translation 144 ms: "How's that okay today? Thank you very much." |
+| Rule 2 — en speech → ur | **PASS** | decision `translate/preferred_language` (whisper p=1.00), translation 172 ms: «خوش آمدید۔ تم آج کیسے کر رہے ہو؟ یہ حقیقی آواز کا امتحان ہے۔» |
+| Rule 3 — es pass-through | **PASS** | decision `passthrough/third_language` (whisper p=0.99), provider NOT called |
+| Standalone detector (measured) | — | en p=0.997 · es p=0.989 · ur→`hi` p=0.775 (full utterance) · ur greeting 2.5 s PREFIX→`ar` p=0.93 (why the cap is 8 s, not 2.5 s) |
+| MT termination fix (measured) | — | without source EOS: repetition loops; with the model's `</s>`: clean 3-token output — «موسم اچھا ہے» |
+| `e2e_translation_check.py` (live :3000) | **3/3 PASS** | real speech → real WS → real offline CT2 OPUS-MT |
+| Continuous speech + detection budget | **PASS** | 5/5 utterances, flush→text 3.72–3.90 s (gate ≤ 4.0 s) with the detect pass included |
+| Browser smoke after the translation UI | **10/10** | zero console/page errors |
+| Backend / frontend suites | **128+1xfail / 57** | §2/§3 |
+
+Honest MT quality note: the bundled OPUS-MT small models are everyday-sentence
+grade (KI-012) — the pipeline, decisions, limits and protocol are production
+paths; the provider is one setting away from a stronger engine.

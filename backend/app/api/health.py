@@ -43,6 +43,9 @@ async def health(request: Request) -> dict[str, object]:
     vad = getattr(state, "vad", None)
     if vad is not None:
         payload["vad"] = vad.describe()
+    translator = getattr(state, "translator", None)
+    if translator is not None:
+        payload["translation"] = translator.describe()
     stt_queue = getattr(state, "stt_queue", None)
     if stt_queue is not None:
         payload["stt_queue"] = stt_queue.stats()

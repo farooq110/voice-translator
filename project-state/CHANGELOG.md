@@ -2,6 +2,47 @@
 
 All meaningful project changes. Format based on Keep a Changelog.
 
+## [0.3.0] — Phase 3 — Translation Decision Engine and Bidirectional Translation (2026-11-01)
+
+Input: user approval "After that start the phase 3 and complete it" (master
+prompt §23). Design + measured findings in ADR-0012.
+
+### Added
+- **Translation decision engine** (pure, any configured pair): Rule 1 native
+  → preferred (for the other participant), Rule 2 preferred → native (for
+  the translator user), Rule 3 every third language passes through with the
+  provider never called, plus honest pass-throughs for identical config,
+  low-confidence detection, undetected language, unsupported pair and
+  over-long text.
+- **Detection architecture "detect-first, pin-the-decode"** (ADR-0012 v2):
+  standalone `detect_language` pass (measured: en p=0.997, es p=0.989,
+  ur→`hi` p=0.775 — the KI-002 signature), ur/hi cluster + 0.60 threshold +
+  native fallback resolution, then ONE decode pinned to the resolved
+  language. Full auto-decode was measured unusable for Urdu (`ar` p=0.97,
+  mixed Arabic/Devanagari text, 3–4× slower) and is never used.
+- **Translation providers**: `local` offline CTranslate2 OPUS-MT
+  (ur↔en + es↔en, `scripts/download_translation_models.py`, measured EOS
+  framing fix for the CT2 conversions), `fake` deterministic stub, `libre`
+  HTTP (MockTransport-tested), `none` disables. Keyless web providers probed
+  and rejected: MyMemory (quota), Google gtx (bot-wall), argos index (404),
+  ct2fast (401).
+- **Protocol v1 (additive)**: `transcription.decision`
+  {action, reason, source_language, target_language?, detection}; new
+  `translation` event (same utterance id); non-fatal utterance-scoped
+  `translation_failed` / `translation_timeout` / `translation_rate_limited`.
+- **Bounded execution**: dedicated worker thread, 30/min sliding-window rate
+  limit, ≤2 concurrent, 8 s timeout, stale-drop + task cancellation on close,
+  2000-char text cap. Unicode/RTL text never rewritten.
+- **Frontend**: `VITE_FEATURE_TRANSLATION` flag; per-line direction badge
+  (`UR → EN`) or pass-through chip; RTL-aware translated text; per-line
+  error chips; immutable update-by-utterance-id; protocol parser tolerant of
+  `decision: null`.
+- **Verification**: backend **128 passed + 1 xfail** (incl. real offline MT
+  tests), frontend **57 tests** + tsc/lint/build clean, live
+  `e2e_translation_check.py` **3/3** (Rules 1–3, real speech + real MT),
+  continuous speech **5/5 ≤ 4.0 s** with the detection pass included,
+  synthetic E2E 3/3, silence guard PASS, browser smoke **10/10**.
+
 ## [0.2.2] — QA fix round — BUG-001 error attribution + BUG-002 true push-to-talk (2026-11-01)
 
 Input: independent Phase 2 QA report (verdict PASS; 2 Low defects + 3

@@ -62,6 +62,24 @@ class STTProvider(ABC):
         and, later, by Phase 3 for the *other* participant's audio).
         """
 
+    def detect_pcm(
+        self,
+        pcm16: bytes,
+        *,
+        sample_rate: int,
+        channels: int = 1,
+    ) -> tuple[str | None, float]:
+        """Detect the spoken language of PCM16 audio (ADR-0012 v2).
+
+        Returns (primary_subtag | None, probability 0..1). Used by the
+        translation decision engine's auto mode BEFORE the decode — the
+        decode itself is then pinned to the resolved language (never
+        auto-decoded; KI-002/KI-006). Providers that cannot detect may
+        return (None, 0.0) — the caller falls back to the configured
+        native language.
+        """
+        return None, 0.0
+
     def is_low_confidence(self, probability: float) -> bool:
         return probability < self.low_confidence_threshold
 
