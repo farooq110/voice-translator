@@ -24,10 +24,9 @@ frontend/dist/
 .env.local
 .env.*.local
 
-# --- Platform runtime artifacts ---
-.zscripts/dev.log
-.zscripts/dev.pid
-.zscripts/*.log
+# --- Platform runtime artifacts (whole dir: platform auto-checkpointing
+#     must never sweep runtime files into commits) ---
+.zscripts/
 dev.log
 server.log
 *.pid
