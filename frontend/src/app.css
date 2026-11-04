@@ -430,6 +430,41 @@ body {
   color: var(--muted);
 }
 
+/* ---------- spoken playback (Phase 4, ADR-0013) ---------- */
+
+.chip--speaking {
+  background: var(--accent);
+  color: #fff;
+  animation: speaking-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes speaking-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.stop-voice {
+  align-self: flex-start;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.stop-voice:hover {
+  background: var(--accent-soft);
+}
+
 .transcript-translation {
   margin-top: 4px;
   display: flex;

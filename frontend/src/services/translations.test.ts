@@ -2,9 +2,12 @@ import { describe, expect, it } from 'vitest'
 import {
   applyTranslationError,
   applyTranslationEvent,
+  applyVoiceError,
   decisionBadgeText,
   isTranslationErrorCode,
+  isVoiceErrorCode,
   translationErrorText,
+  voiceErrorText,
   type TranslationCarrier,
 } from './translations'
 import type { TranslationDecision, TranslationEvent } from '../types/protocol'
@@ -138,5 +141,44 @@ describe('translationErrorText', () => {
       'translation skipped · rate limit',
     )
     expect(translationErrorText('unknown_code')).toBe('unknown_code')
+  })
+})
+
+describe('voice errors (Phase 4, ADR-0013)', () => {
+  it('recognizes the utterance-scoped TTS codes', () => {
+    expect(isVoiceErrorCode('tts_failed')).toBe(true)
+    expect(isVoiceErrorCode('tts_timeout')).toBe(true)
+    expect(isVoiceErrorCode('tts_rate_limited')).toBe(true)
+    expect(isVoiceErrorCode('tts_unsupported_language')).toBe(true)
+    expect(isVoiceErrorCode('tts_text_too_long')).toBe(true)
+    expect(isVoiceErrorCode('translation_failed')).toBe(false)
+    expect(isVoiceErrorCode('stt_error')).toBe(false)
+  })
+
+  it('attaches a voice error to exactly its utterance', () => {
+    const result = applyVoiceError([ENTRY_A, ENTRY_B], ENTRY_B.id, 'tts_unsupported_language')
+    const [first, second] = result
+    expect(first?.voiceError).toBeUndefined()
+    expect(second?.voiceError).toEqual({ code: 'tts_unsupported_language' })
+    // the translated text is untouched
+    expect(second?.translation).toBeUndefined()
+  })
+
+  it('clears a previous voice error when a translation arrives', () => {
+    const errored = applyVoiceError([ENTRY_A], ENTRY_A.id, 'tts_failed')
+    const recovered = applyTranslationEvent(errored, {
+      ...TRANSLATION_EVENT,
+      id: ENTRY_A.id,
+    })
+    const line = recovered[0]
+    expect(line?.voiceError).toBeUndefined()
+    expect(line?.translation).toBeDefined()
+  })
+
+  it('maps voice error codes to human text', () => {
+    expect(voiceErrorText('tts_failed')).toBe('voice failed · text kept')
+    expect(voiceErrorText('tts_unsupported_language')).toBe('no voice for this language · text kept')
+    expect(voiceErrorText('tts_text_too_long')).toBe('too long to speak · text kept')
+    expect(voiceErrorText('mystery')).toBe('mystery')
   })
 })

@@ -57,6 +57,7 @@ from ..audio.vad import UtterancePlan, UtterancePlanner
 from ..config import Settings
 from ..models.protocol import (
     PROTOCOL_VERSION,
+    AudioEvent,
     ErrorEvent,
     FlushMessage,
     HelloMessage,
@@ -78,6 +79,7 @@ from ..translation.decision import (
     TranslationDecision,
     primary_subtag,
 )
+from ..tts import TTSService
 from .backpressure import SttQueue
 
 logger = logging.getLogger(__name__)
@@ -103,6 +105,7 @@ class _Connection:
         vad: UtterancePlanner,
         stt_queue: SttQueue,
         translator: TranslationService | None = None,
+        tts: TTSService | None = None,
     ) -> None:
         self.websocket = websocket
         self.settings = settings
@@ -112,6 +115,7 @@ class _Connection:
         self.vad = vad
         self.stt_queue = stt_queue
         self.translator = translator
+        self.tts = tts
         self.hello_done = False
         self.closed = False
         self._send_lock = asyncio.Lock()
@@ -119,6 +123,8 @@ class _Connection:
         # Phase 3: in-flight translations are tracked so close can cancel
         # them (no outdated work, no sends on a dead socket).
         self._translation_tasks: set[asyncio.Task[None]] = set()
+        # Phase 4: in-flight syntheses are tracked the same way.
+        self._tts_tasks: set[asyncio.Task[None]] = set()
         self._max_buffer_bytes = (
             int(settings.max_utterance_seconds * settings.audio_sample_rate) * 2
         )
@@ -133,6 +139,17 @@ class _Connection:
             return
         async with self._send_lock:
             await self.websocket.send_text(event.model_dump_json())
+
+    async def _send_audio(self, meta: AudioEvent, pcm: bytes) -> None:
+        """Send one audio metadata JSON event followed by its binary PCM16
+        frame — under the SAME lock so the pairing can never interleave with
+        another event (WebSocket ordering then guarantees the client can
+        pair the next binary frame with this metadata)."""
+        if self.closed:
+            return
+        async with self._send_lock:
+            await self.websocket.send_text(meta.model_dump_json())
+            await self.websocket.send_bytes(pcm)
 
     async def send_error(
         self,
@@ -558,6 +575,17 @@ class _Connection:
                     duration_ms=outcome.duration_ms,
                 )
             )
+            # Phase 4 (ADR-0013): speak the translated text. Pass-through
+            # never reaches this branch — original audio is NEVER regenerated
+            # with TTS (master prompt §17).
+            if self.tts is not None and self.tts.enabled and outcome.text.strip():
+                task = asyncio.create_task(
+                    self._synthesize_and_deliver(
+                        utterance_id, text=outcome.text, language=decision.target_language
+                    )
+                )
+                self._tts_tasks.add(task)
+                task.add_done_callback(self._tts_tasks.discard)
             return
         messages = {
             "failed": f"Translation failed ({outcome.error_message or 'provider error'}) — the original transcript is kept.",
@@ -568,6 +596,66 @@ class _Connection:
             "failed": "translation_failed",
             "timeout": "translation_timeout",
             "rate_limited": "translation_rate_limited",
+        }
+        await self.send_error(
+            codes[outcome.status],
+            messages[outcome.status],
+            utterance_id=utterance_id,
+        )
+
+    async def _synthesize_and_deliver(
+        self, utterance_id: str, *, text: str, language: str
+    ) -> None:
+        """Synthesize one translated utterance (Phase 4) and deliver the audio.
+
+        The provider call happens inside the TTSService (rate limit,
+        concurrency cap, timeout); failures become non-fatal, utterance-
+        scoped errors — the translated text is already on screen, only the
+        audio is missing.
+        """
+        assert self.tts is not None
+        outcome = await self.tts.synthesize(text=text, language=language)
+        if self.closed or self.session.closed:
+            logger.debug(
+                "ws.tts_stale session_id=%s id=%s status=%s dropped",
+                self.session.id, utterance_id, outcome.status,
+            )
+            return
+        if outcome.status == "ok":
+            if len(outcome.pcm) < 2 or len(outcome.pcm) % 2 != 0:
+                # Defensive: never send a malformed PCM frame.
+                await self.send_error(
+                    "tts_failed",
+                    "Voice synthesis produced malformed audio — the translated text is kept.",
+                    utterance_id=utterance_id,
+                )
+                return
+            await self._send_audio(
+                AudioEvent(
+                    id=utterance_id,
+                    language=language,
+                    sample_rate=outcome.sample_rate,
+                    bytes=len(outcome.pcm),
+                    duration_ms=outcome.audio_duration_ms,
+                    synthesis_ms=outcome.duration_ms,
+                    provider=outcome.provider,
+                ),
+                outcome.pcm,
+            )
+            return
+        messages = {
+            "failed": f"Voice synthesis failed ({outcome.error_message or 'provider error'}) — the translated text is kept.",
+            "timeout": "Voice synthesis took too long and was skipped — the translated text is kept.",
+            "rate_limited": "Voice rate limit reached — the translated text is kept.",
+            "unsupported": f"No voice available for {language} — the translated text is kept.",
+            "text_too_long": "This sentence is too long to be spoken — the translated text is kept.",
+        }
+        codes = {
+            "failed": "tts_failed",
+            "timeout": "tts_timeout",
+            "rate_limited": "tts_rate_limited",
+            "unsupported": "tts_unsupported_language",
+            "text_too_long": "tts_text_too_long",
         }
         await self.send_error(
             codes[outcome.status],
@@ -640,6 +728,7 @@ async def audio_socket(websocket: WebSocket) -> None:
         vad=vad,
         stt_queue=stt_queue,
         translator=getattr(websocket.app.state, "translator", None),
+        tts=getattr(websocket.app.state, "tts", None),
     )
     logger.info("ws.open session_id=%s", session.id)
 
@@ -674,6 +763,8 @@ async def audio_socket(websocket: WebSocket) -> None:
         conn.closed = True
         for task in list(conn._translation_tasks):
             task.cancel()  # cancellation of outdated requests (prompt §10/§15)
+        for task in list(conn._tts_tasks):
+            task.cancel()  # Phase 4: cancel outdated syntheses the same way
         sessions.remove(session.id)
         logger.info(
             "ws.close session_id=%s utterances=%d leftover_bytes=%d",

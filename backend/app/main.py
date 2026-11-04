@@ -27,10 +27,11 @@ from .sessions.manager import SessionManager
 from .stt import build_stt_provider
 from .stt.base import STTProvider
 from .translation import TranslationService, build_translation_service
+from .tts import TTSService, build_tts_service
 from .ws.audio_ws import router as audio_router
 from .ws.backpressure import SttQueue
 
-APP_VERSION = "0.3.1"
+APP_VERSION = "0.4.0"
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -42,6 +43,7 @@ def create_app(
     stt: STTProvider | None = None,
     vad: UtterancePlanner | None = None,
     translator: TranslationService | None = None,
+    tts: TTSService | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
@@ -58,6 +60,7 @@ def create_app(
     )
     stt_queue = SttQueue(max_queued=settings.stt_max_queue_depth)
     translation = translator if translator is not None else build_translation_service(settings)
+    tts_service = tts if tts is not None else build_tts_service(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -70,6 +73,7 @@ def create_app(
         app.state.stt_queue = stt_queue
         app.state.sessions = sessions
         app.state.translator = translation
+        app.state.tts = tts_service
         # The WS endpoint reads settings from app.state so that injected
         # settings (tests) take effect — get_settings() alone would bypass
         # them (and is cached).
@@ -85,10 +89,13 @@ def create_app(
             app.state.vad_warmup = vad_warmup
         translation_warmup = asyncio.create_task(asyncio.to_thread(translation.warmup))
         app.state.translation_warmup = translation_warmup
+        tts_warmup = asyncio.create_task(asyncio.to_thread(tts_service.warmup))
+        app.state.tts_warmup = tts_warmup
         logger.info(
-            "app started version=%s env=%s stt=%s model=%s device=%s vad=%s translation=%s",
+            "app started version=%s env=%s stt=%s model=%s device=%s vad=%s translation=%s tts=%s",
             APP_VERSION, settings.app_env, provider.name, settings.stt_model,
             settings.stt_device, vad_pipeline.describe(), translation.describe(),
+            tts_service.describe(),
         )
         try:
             yield
@@ -97,14 +104,16 @@ def create_app(
             if vad_pipeline.enabled:
                 app.state.vad_warmup.cancel()
             translation_warmup.cancel()
+            tts_warmup.cancel()
             translation.aclose()
+            tts_service.aclose()
             executor.shutdown(wait=False, cancel_futures=True)
             logger.info("app stopped")
 
     app = FastAPI(
         title="AI Voice Translator",
         version=APP_VERSION,
-        summary="Real-time voice translation — Phase 3: translation decision engine",
+        summary="Real-time voice translation — Phase 4: TTS + browser audio playback",
         lifespan=lifespan,
     )
 

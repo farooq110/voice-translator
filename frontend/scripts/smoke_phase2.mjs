@@ -61,7 +61,7 @@ try {
 
   // C4 — hands-free toggle visible, default ON (the flag is lazily persisted:
   // written on first toggle, so a virgin profile reads null — C5 covers persistence)
-  const toggle = page.locator('.handsfree input[type=checkbox]')
+  const toggle = page.locator('.handsfree:not(.playback-toggle) input[type=checkbox]')
   const toggleVisible = await toggle.isVisible()
   const defaultChecked = toggleVisible ? await toggle.isChecked() : false
   const storedFlag = await page.evaluate(() => window.localStorage.getItem('vt.hands_free'))
@@ -102,7 +102,7 @@ try {
   check('C8', 'app still interactive after stop', stillOpen)
 
   // C9 — toggle back ON, reload, record again: hands-free wording
-  await page.locator('.handsfree input[type=checkbox]').check()
+  await page.locator('.handsfree:not(.playback-toggle) input[type=checkbox]').check()
   await page.reload({ waitUntil: 'networkidle' })
   await page.getByText('Connected', { exact: true }).waitFor({ timeout: 10_000 })
   await page.getByRole('button', { name: /start speaking/i }).click()

@@ -22,11 +22,17 @@ export interface TranslationErrorInfo {
   code: string
 }
 
+/** Phase 4: a TTS problem attached to the utterance (text kept, audio lost). */
+export interface VoiceErrorInfo {
+  code: string
+}
+
 /** Any transcript entry that can carry a translation outcome. */
 export interface TranslationCarrier {
   id: string
   translation?: TranslationInfo
   translationError?: TranslationErrorInfo
+  voiceError?: VoiceErrorInfo
 }
 
 /** Attach a `translation` event to exactly its utterance (by id). */
@@ -46,6 +52,7 @@ export function applyTranslationEvent<T extends TranslationCarrier>(
             durationMs: event.duration_ms,
           },
           translationError: undefined,
+          voiceError: undefined,
         }
       : entry,
   )
@@ -72,6 +79,49 @@ export function applyTranslationError<T extends TranslationCarrier>(
   return entries.map((entry) =>
     entry.id === utteranceId ? { ...entry, translationError: { code } } : entry,
   )
+}
+
+const VOICE_ERROR_CODES: readonly string[] = [
+  'tts_failed',
+  'tts_timeout',
+  'tts_rate_limited',
+  'tts_unsupported_language',
+  'tts_text_too_long',
+]
+
+/** True for the utterance-scoped TTS error codes (handled per line, never
+ * as the global banner — the translated text is always kept). */
+export function isVoiceErrorCode(code: string): boolean {
+  return VOICE_ERROR_CODES.includes(code)
+}
+
+/** Attach a voice error to exactly its utterance (by id). */
+export function applyVoiceError<T extends TranslationCarrier>(
+  entries: readonly T[],
+  utteranceId: string,
+  code: string,
+): T[] {
+  return entries.map((entry) =>
+    entry.id === utteranceId ? { ...entry, voiceError: { code } } : entry,
+  )
+}
+
+/** Human text for an utterance-scoped voice error chip (Phase 4). */
+export function voiceErrorText(code: string): string {
+  switch (code) {
+    case 'tts_failed':
+      return 'voice failed · text kept'
+    case 'tts_timeout':
+      return 'voice timed out · text kept'
+    case 'tts_rate_limited':
+      return 'voice skipped · rate limit'
+    case 'tts_unsupported_language':
+      return 'no voice for this language · text kept'
+    case 'tts_text_too_long':
+      return 'too long to speak · text kept'
+    default:
+      return code
+  }
 }
 
 /** Chip text for a transcription's decision (badge / pass-through reason). */

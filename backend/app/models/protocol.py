@@ -189,8 +189,39 @@ class PongEvent(StrictModel):
     ts: int
 
 
+class AudioEvent(StrictModel):
+    """Synthesized-speech metadata (Phase 4, ADR-0013).
+
+    Arrives AFTER the `translation` event with the same id — and is ALWAYS
+    followed by exactly one BINARY frame containing `bytes` octets of raw
+    PCM16 little-endian mono audio at `sample_rate` (WebSocket ordering
+    guarantees the pairing; the client pairs the next binary frame it sees
+    with the most recent `audio` metadata).
+
+    Only ever sent for `translate` decisions — original pass-through audio
+    is forwarded as captured and is NEVER regenerated with TTS (master
+    prompt §17). Absent when TTS is disabled or the voice for the target
+    language is not provisioned (a non-fatal, utterance-scoped error is
+    emitted instead).
+    """
+
+    type: Literal["audio"] = "audio"
+    v: int = PROTOCOL_VERSION
+    id: str
+    language: str
+    encoding: Literal["pcm_s16le"] = "pcm_s16le"
+    sample_rate: int = Field(ge=8_000, le=48_000)
+    channels: int = Field(default=1, ge=1, le=2)
+    bytes: int = Field(ge=2)
+    """Size of the following binary frame (a multiple of 2 — PCM16 samples)."""
+    duration_ms: int = Field(ge=0)
+    """Duration of the synthesized audio (not the synthesis time)."""
+    synthesis_ms: int = Field(ge=0)
+    provider: str
+
+
 ServerEvent = Annotated[
-    Union[ReadyEvent, TranscriptionEvent, TranslationEvent, ErrorEvent, PongEvent],
+    Union[ReadyEvent, TranscriptionEvent, TranslationEvent, ErrorEvent, PongEvent, AudioEvent],
     Field(discriminator="type"),
 ]
 
@@ -199,6 +230,7 @@ __all__ = [
     "SUPPORTED_CHANNELS",
     "SUPPORTED_ENCODING",
     "SUPPORTED_SAMPLE_RATE",
+    "AudioEvent",
     "AudioFormat",
     "ErrorEvent",
     "FlushMessage",

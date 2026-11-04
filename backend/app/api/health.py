@@ -46,6 +46,9 @@ async def health(request: Request) -> dict[str, object]:
     translator = getattr(state, "translator", None)
     if translator is not None:
         payload["translation"] = translator.describe()
+    tts = getattr(state, "tts", None)
+    if tts is not None:
+        payload["tts"] = tts.describe()
     stt_queue = getattr(state, "stt_queue", None)
     if stt_queue is not None:
         payload["stt_queue"] = stt_queue.stats()

@@ -274,4 +274,116 @@ describe('TranslatorWsClient', () => {
     ws.serverFrame(READY_EVENT)
     expect(client.isReady()).toBe(true)
   })
+
+  // ---------------- Phase 4 (ADR-0013): audio meta + binary pairing ------
+
+  const AUDIO_META = {
+    v: 1,
+    type: 'audio',
+    id: 'c_0001_dead01',
+    language: 'en',
+    encoding: 'pcm_s16le',
+    sample_rate: 22050,
+    channels: 1,
+    bytes: 4,
+    duration_ms: 100,
+    synthesis_ms: 12,
+    provider: 'piper',
+  }
+
+  function makeClientWithAudio(): {
+    client: TranslatorWsClient
+    events: ServerEvent[]
+    protocolErrors: string[]
+    audio: { meta: unknown; pcm: ArrayBuffer }[]
+  } {
+    const events: ServerEvent[] = []
+    const protocolErrors: string[] = []
+    const audio: { meta: unknown; pcm: ArrayBuffer }[] = []
+    const client = new TranslatorWsClient({
+      url: 'ws://testserver/ws/audio',
+      config: CONFIG,
+      handlers: {
+        onStatus: () => {},
+        onEvent: (event) => events.push(event),
+        onProtocolError: (error) => protocolErrors.push(error.message),
+        onAudio: (meta, pcm) => audio.push({ meta, pcm }),
+      },
+      webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+    })
+    return { client, events, protocolErrors, audio }
+  }
+
+  it('pairs audio metadata with the following binary frame (ADR-0013)', async () => {
+    const { client, events, audio } = makeClientWithAudio()
+    client.connect()
+    const ws = lastSocket()
+    ws.open()
+    await vi.advanceTimersByTimeAsync(0)
+    ws.serverFrame(READY_EVENT)
+    ws.serverFrame(AUDIO_META)
+    const pcm = new Int16Array([1, -1, 2, -2]).buffer
+    ws.onmessage?.({ data: pcm })
+
+    // metadata is NOT forwarded via onEvent — only as a paired unit
+    expect(events.map((event) => event.type)).toEqual(['ready'])
+    expect(audio).toHaveLength(1)
+    expect(audio[0]?.meta).toMatchObject({ id: 'c_0001_dead01', language: 'en' })
+    expect(audio[0]?.pcm).toBe(pcm)
+  })
+
+  it('keeps pairing across consecutive audio clips in order', async () => {
+    const { client, audio } = makeClientWithAudio()
+    client.connect()
+    const ws = lastSocket()
+    ws.open()
+    await vi.advanceTimersByTimeAsync(0)
+    const pcmA = new Int16Array([1, 2]).buffer
+    const pcmB = new Int16Array([3, 4]).buffer
+    ws.serverFrame({ ...AUDIO_META, id: 'a' })
+    ws.onmessage?.({ data: pcmA })
+    ws.serverFrame({ ...AUDIO_META, id: 'b' })
+    ws.onmessage?.({ data: pcmB })
+    expect(audio.map((item) => (item.meta as { id: string }).id)).toEqual(['a', 'b'])
+    expect(audio[0]?.pcm).toBe(pcmA)
+    expect(audio[1]?.pcm).toBe(pcmB)
+  })
+
+  it('ignores binary frames without pending audio metadata', async () => {
+    const { client, audio } = makeClientWithAudio()
+    client.connect()
+    const ws = lastSocket()
+    ws.open()
+    await vi.advanceTimersByTimeAsync(0)
+    ws.onmessage?.({ data: new Int16Array([9, 9]).buffer })
+    expect(audio).toHaveLength(0)
+    expect(client.strayBinaryFrameCount).toBe(1)
+  })
+
+  it('clears pending audio metadata on close (no stale pairing)', async () => {
+    const { client, audio } = makeClientWithAudio()
+    client.connect()
+    const ws = lastSocket()
+    ws.open()
+    await vi.advanceTimersByTimeAsync(0)
+    ws.serverFrame(AUDIO_META)
+    ws.close() // binary never arrived
+    client.connect()
+    lastSocket().open()
+    await vi.advanceTimersByTimeAsync(0)
+    lastSocket().onmessage?.({ data: new Int16Array([5, 5]).buffer })
+    expect(audio).toHaveLength(0) // the stale meta was dropped with the socket
+    expect(lastSocket().sentJson().some((msg) => (msg as { type?: string }).type === 'hello')).toBe(true)
+  })
+
+  it('rejects an audio event with a wrong encoding via protocol error', async () => {
+    const { client, protocolErrors, audio } = makeClientWithAudio()
+    client.connect()
+    const ws = lastSocket()
+    ws.open()
+    await vi.advanceTimersByTimeAsync(0)
+    ws.serverFrame({ ...AUDIO_META, encoding: 'mp3' })
+    expect(protocolErrors.length).toBe(1)
+    expect(audio).toHaveLength(0)
+  })
 })

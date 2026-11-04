@@ -92,6 +92,23 @@ class Settings(BaseSettings):
     libretranslate_url: str = ""
     libretranslate_api_key: str = ""
 
+    # --- Text-to-speech (Phase 4, ADR-0013) ---
+    # `piper` — offline Piper neural voices under `tts_voices_dir`
+    #           (one directory per language, e.g. models/tts/ur/); provision
+    #           with backend/scripts/download_tts_voices.py. No keys, no GPU,
+    #           no network; audio never leaves the machine.
+    # `fake`  — deterministic sine-tone stub for tests/demos.
+    # `none`  — TTS disabled: translated text is displayed, never spoken.
+    tts_provider: str = "piper"
+    tts_timeout_s: float = 10.0
+    tts_rate_limit_per_minute: int = 30
+    tts_max_concurrent: int = 1
+    # Synthesizing a novel-length text would produce minutes of audio; texts
+    # above this bound keep their translated text but are not spoken.
+    tts_max_text_chars: int = 800
+    tts_worker_threads: int = 1
+    tts_voices_dir: str = "models/tts"
+
     # --- Sessions / security ---
     max_sessions: int = 50
     cors_origins: str = ""

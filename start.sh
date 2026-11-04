@@ -75,6 +75,27 @@ if [ "${TRANSLATION_PROVIDER_EFF}" = "local" ]; then
   fi
 fi
 
+# --- Phase 4 (ADR-0013): provision offline Piper TTS voices ----------------
+# Same runtime-artifact discipline as the MT models above: models/tts/ is
+# git-ignored, so a fresh checkout has zero voices and every translated
+# sentence would be text-only. Provision idempotently before boot (~190 MB
+# first run, seconds when present).
+TTS_PROVIDER_EFF="${TTS_PROVIDER:-}"
+if [ -z "${TTS_PROVIDER_EFF}" ] && [ -f backend/.env ]; then
+  TTS_PROVIDER_EFF="$(sed -n 's/^TTS_PROVIDER=//p' backend/.env | tail -1 | tr -d '\"'"'"'[:space:]')"
+fi
+TTS_PROVIDER_EFF="${TTS_PROVIDER_EFF:-piper}"
+if [ "${TTS_PROVIDER_EFF}" = "piper" ]; then
+  if [ ! -d models/tts ] || [ -z "$(ls -A models/tts 2>/dev/null)" ]; then
+    echo "[start.sh] TTS voices missing -> provisioning via backend/scripts/download_tts_voices.py (first boot only, ~190 MB)"
+    if (cd backend && .venv/bin/python scripts/download_tts_voices.py); then
+      echo "[start.sh] TTS voices provisioned"
+    else
+      echo "[start.sh] ERROR: TTS voice provisioning FAILED - translated text stays text-only (see /health tts.languages)" >&2
+    fi
+  fi
+fi
+
 echo "[start.sh] starting app on :${PORT} (HF_HOME=${HF_HOME})"
 cd backend
 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port "${PORT}" &

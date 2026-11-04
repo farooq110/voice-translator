@@ -17,11 +17,14 @@ import {
 } from '../services/audioCapture'
 import { TranslatorWsClient, type WsStatus } from '../services/wsClient'
 import { FlushTracker } from '../services/flushTracker'
+import { SpeechPlayer, type PlaybackState } from '../services/playback'
 import { surfaceNoSpeechError } from '../services/noSpeechPolicy'
 import {
   applyTranslationError,
   applyTranslationEvent,
+  applyVoiceError,
   isTranslationErrorCode,
+  isVoiceErrorCode,
   type TranslationCarrier,
   type TranslationErrorInfo,
   type TranslationInfo,
@@ -57,6 +60,7 @@ const MAX_TRANSCRIPTS = 50
 const LS_NATIVE = 'vt.native_language'
 const LS_PREFERRED = 'vt.preferred_language'
 const LS_HANDS_FREE = 'vt.hands_free'
+const LS_PLAYBACK = 'vt.playback'
 
 // --- Sentence endpointing (client-side energy gate, ADR-0007) ---------------
 //
@@ -166,6 +170,15 @@ export interface SessionState {
   /** Hands-free mode (Phase 2): mic stays open, sentences flow at pauses. */
   handsFree: boolean
   setHandsFree: (on: boolean) => void
+  /** Phase 4: spoken playback of translated sentences (mute toggle). */
+  playbackEnabled: boolean
+  setPlaybackEnabled: (on: boolean) => void
+  /** Id of the utterance whose translation is currently audible (or null). */
+  speakingId: string | null
+  /** Clips scheduled behind the speaking one. */
+  queuedAudioCount: number
+  /** Stops the current + queued audio (keeps future utterances audible). */
+  stopPlayback: () => void
   /** Removes one sentence bubble from the transcript panel. */
   deleteTranscript: (id: string) => void
   toggleRecording: () => void
@@ -191,6 +204,10 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     loadStoredLanguage(LS_PREFERRED, DEFAULT_PREFERRED_LANGUAGE),
   )
   const [handsFree, setHandsFreeState] = useState(() => loadStoredFlag(LS_HANDS_FREE, true))
+  const [playbackEnabled, setPlaybackEnabledState] = useState(() =>
+    loadStoredFlag(LS_PLAYBACK, true),
+  )
+  const [playback, setPlayback] = useState<PlaybackState>({ activeId: null, waitingCount: 0 })
 
   const clientRef = useRef<TranslatorWsClient | null>(null)
   const captureRef = useRef<CaptureHandle | null>(null)
@@ -209,6 +226,12 @@ export function useTranslatorSession(wsUrl: string): SessionState {
    * structurally impossible. */
   const inFlightRef = useRef<FlushTracker>(new FlushTracker())
   const flushSeqRef = useRef(0)
+  /** Phase 4: TTS playback queue — created once, injected AudioContext only
+   * after a user gesture (autoplay policy). Muting cancels scheduled audio. */
+  const playerRef = useRef<SpeechPlayer | null>(null)
+  if (playerRef.current === null) {
+    playerRef.current = new SpeechPlayer(undefined, playbackEnabled, setPlayback)
+  }
   const configRef = useRef<HelloConfig>({
     native_language: nativeLanguage,
     preferred_language: preferredLanguage,
@@ -295,13 +318,20 @@ export function useTranslatorSession(wsUrl: string): SessionState {
         return
       }
       if (event.type === 'error') {
-        // Utterance-scoped translation failures never touch the global
-        // banner nor the indicator (the transcription already settled it) —
-        // they are attached to the line, original text kept.
+        // Utterance-scoped translation AND voice failures never touch the
+        // global banner nor the indicator — they are attached to the line,
+        // original/translated text kept (Phase 3 + Phase 4).
         if (isTranslationErrorCode(event.code)) {
           const id = event.utterance_id
           if (id !== undefined) {
             setTranscripts((prev) => applyTranslationError(prev, id, event.code))
+          }
+          return
+        }
+        if (isVoiceErrorCode(event.code)) {
+          const id = event.utterance_id
+          if (id !== undefined) {
+            setTranscripts((prev) => applyVoiceError(prev, id, event.code))
           }
           return
         }
@@ -337,6 +367,10 @@ export function useTranslatorSession(wsUrl: string): SessionState {
         onEvent: handleEvent,
         onProtocolError: (protocolError) =>
           setError({ code: 'protocol_error', message: protocolError.message }),
+        // Phase 4: synthesized speech arrives as metadata + binary pair.
+        onAudio: (meta, pcm) => {
+          playerRef.current?.enqueue(meta, pcm)
+        },
       },
     })
     clientRef.current = client
@@ -344,6 +378,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     return () => {
       client.close()
       clientRef.current = null
+      playerRef.current?.stopAll()
     }
   }, [wsUrl, handleEvent])
 
@@ -359,6 +394,9 @@ export function useTranslatorSession(wsUrl: string): SessionState {
       // (ADR-0009) — forget them so the indicator cannot get stuck.
       inFlightRef.current.clear()
       setTranscribing(false)
+      // Phase 4: cancel outdated audio — nothing queued for a dead session
+      // may keep playing once the connection is gone.
+      playerRef.current?.stopAll()
       setError({
         code: 'connection_lost',
         message: 'Connection lost — recording stopped. Speak again once reconnected.',
@@ -385,6 +423,8 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     }
     setStartingRecording(true)
     endpointRef.current = freshEndpointState()
+    // Unlock audio output with this user gesture (browser autoplay policy).
+    playerRef.current?.resume()
     try {
       const handle = await startMicCapture({
         onChunk: (chunk) => {
@@ -467,10 +507,22 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     storeFlag(LS_HANDS_FREE, on)
   }, [])
 
+  const setPlaybackEnabled = useCallback((on: boolean) => {
+    setPlaybackEnabledState(on)
+    playerRef.current?.setEnabled(on) // muting cancels scheduled audio
+    storeFlag(LS_PLAYBACK, on)
+  }, [])
+
+  const stopPlayback = useCallback(() => {
+    playerRef.current?.stopAll()
+  }, [])
+
   const dismissError = useCallback(() => setError(null), [])
 
   const deleteTranscript = useCallback((id: string) => {
     setTranscripts((prev) => prev.filter((entry) => entry.id !== id))
+    // Cancellation of outdated audio: a deleted line stops being spoken.
+    playerRef.current?.cancel(id)
   }, [])
 
   return {
@@ -491,6 +543,11 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     setPreferredLanguage,
     handsFree,
     setHandsFree,
+    playbackEnabled,
+    setPlaybackEnabled,
+    speakingId: playback.activeId,
+    queuedAudioCount: playback.waitingCount,
+    stopPlayback,
     deleteTranscript,
     toggleRecording,
     dismissError,

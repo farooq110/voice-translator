@@ -236,4 +236,30 @@ describe('translation events (Phase 3, ADR-0012)', () => {
       parseServerEvent(JSON.stringify({ ...TRANSLATION, duration_ms: 'fast' })),
     ).toThrow(ProtocolError)
   })
+
+  it('parses an audio event (Phase 4, ADR-0013)', () => {
+    const event = parseServerEvent(
+      JSON.stringify({
+        v: 1, type: 'audio', id: 'c_0001', language: 'ur',
+        encoding: 'pcm_s16le', sample_rate: 22050, channels: 1,
+        bytes: 88200, duration_ms: 2000, synthesis_ms: 140, provider: 'piper',
+      }),
+    )
+    expect(event).toMatchObject({
+      type: 'audio', id: 'c_0001', language: 'ur', sample_rate: 22050, bytes: 88200,
+    })
+  })
+
+  it('rejects audio events with bad fields (Phase 4)', () => {
+    const base = {
+      v: 1, type: 'audio', id: 'c_0001', language: 'ur',
+      encoding: 'pcm_s16le', sample_rate: 22050, channels: 1,
+      bytes: 88200, duration_ms: 2000, synthesis_ms: 140, provider: 'piper',
+    }
+    expect(() => parseServerEvent(JSON.stringify({ ...base, encoding: 'mp3' }))).toThrow(ProtocolError)
+    expect(() => parseServerEvent(JSON.stringify({ ...base, channels: 2 }))).toThrow(ProtocolError)
+    const missing = { ...base }
+    delete (missing as Record<string, unknown>)['bytes']
+    expect(() => parseServerEvent(JSON.stringify(missing))).toThrow(ProtocolError)
+  })
 })

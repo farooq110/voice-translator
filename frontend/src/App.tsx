@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { ConnectionBadge } from './components/ConnectionBadge'
 import { ErrorBanner } from './components/ErrorBanner'
 import { HandsFreeToggle } from './components/HandsFreeToggle'
+import { PlaybackToggle } from './components/PlaybackToggle'
 import { LanguageSelector } from './components/LanguageSelector'
 import { LevelMeter } from './components/LevelMeter'
 import { MicButton } from './components/MicButton'
@@ -102,9 +103,19 @@ export default function App() {
           {HANDS_FREE_ENABLED ? (
             <HandsFreeToggle checked={session.handsFree} onChange={session.setHandsFree} />
           ) : null}
+          <PlaybackToggle checked={session.playbackEnabled} onChange={session.setPlaybackEnabled} />
+          {session.speakingId !== null ? (
+            <button type="button" className="stop-voice" onClick={session.stopPlayback}>
+              stop voice
+            </button>
+          ) : null}
         </section>
 
-        <TranscriptPanel entries={session.transcripts} onDelete={session.deleteTranscript} />
+        <TranscriptPanel
+          entries={session.transcripts}
+          onDelete={session.deleteTranscript}
+          speakingId={session.speakingId}
+        />
 
         {session.sttInfo !== null ? (
           <p className="app__engine">
@@ -116,10 +127,10 @@ export default function App() {
 
       <footer className="app__footer">
         <p>
-          Phase 3 — live transcription with translation decisions: your language is
-          translated for the other side, theirs for you, and any third language passes
-          through untouched. Spoken output arrives in later phases. Works best in Chrome,
-          Edge and Safari over HTTPS.
+          Phase 4 — live transcription with translation and spoken output: your language is
+          translated for the other side, theirs for you, any third language passes through
+          untouched, and translated sentences are read aloud (offline voices — pass-through
+          speech is never regenerated). Works best in Chrome, Edge and Safari over HTTPS.
         </p>
       </footer>
     </div>

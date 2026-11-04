@@ -150,6 +150,31 @@ export interface TranslationEvent {
   duration_ms: number
 }
 
+/**
+ * Synthesized-speech metadata (Phase 4, ADR-0013).
+ *
+ * Arrives AFTER the `translation` event with the same id and is ALWAYS
+ * followed by exactly one BINARY WebSocket frame containing `bytes` octets
+ * of raw PCM16 little-endian mono audio at `sample_rate`. Only sent for
+ * translate decisions — pass-through audio is never regenerated with TTS.
+ * The wsClient pairs the metadata with the next binary frame and delivers
+ * both via `onAudio` (never through `onEvent`).
+ */
+export interface AudioEvent {
+  v: number
+  type: 'audio'
+  id: string
+  language: string
+  encoding: 'pcm_s16le'
+  sample_rate: number
+  channels: number
+  bytes: number
+  /** Duration of the synthesized audio (not the synthesis time). */
+  duration_ms: number
+  synthesis_ms: number
+  provider: string
+}
+
 export interface ErrorEvent {
   v: number
   type: 'error'
@@ -173,6 +198,7 @@ export type ServerEvent =
   | TranslationEvent
   | ErrorEvent
   | PongEvent
+  | AudioEvent
 
 export class ProtocolError extends Error {
   constructor(message: string) {
@@ -302,6 +328,27 @@ export function parseServerEvent(raw: string): ServerEvent {
         provider: str(data, 'provider', 'translation'),
         duration_ms: num(data, 'duration_ms', 'translation'),
       }
+    case 'audio': {
+      const encoding = str(data, 'encoding', 'audio')
+      if (encoding !== 'pcm_s16le') {
+        throw new ProtocolError(`audio: unsupported encoding "${encoding}"`)
+      }
+      const channels = num(data, 'channels', 'audio')
+      if (channels !== 1) throw new ProtocolError('audio: only mono is supported')
+      return {
+        v,
+        type,
+        id: str(data, 'id', 'audio'),
+        language: str(data, 'language', 'audio'),
+        encoding,
+        sample_rate: num(data, 'sample_rate', 'audio'),
+        channels,
+        bytes: num(data, 'bytes', 'audio'),
+        duration_ms: num(data, 'duration_ms', 'audio'),
+        synthesis_ms: num(data, 'synthesis_ms', 'audio'),
+        provider: str(data, 'provider', 'audio'),
+      }
+    }
     case 'error': {
       const rawUtteranceId = data['utterance_id']
       return {

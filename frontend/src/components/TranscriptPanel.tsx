@@ -1,13 +1,15 @@
 import { useMemo } from 'react'
 import { isRtlLanguage } from '../config/languages'
 import { TRANSLATION_ENABLED } from '../config/flags'
-import { decisionBadgeText, translationErrorText } from '../services/translations'
+import { decisionBadgeText, translationErrorText, voiceErrorText } from '../services/translations'
 import type { TranscriptEntry } from '../hooks/useTranslatorSession'
 
 interface TranscriptPanelProps {
   entries: TranscriptEntry[]
   /** Removes one sentence bubble (the × button next to each line). */
   onDelete: (id: string) => void
+  /** Id of the utterance whose translated speech is currently audible. */
+  speakingId: string | null
 }
 
 /**
@@ -22,7 +24,7 @@ interface TranscriptPanelProps {
  * Pass-through lines never show a translation (the server never produces
  * one), and a failed translation keeps the original text with a warning.
  */
-export function TranscriptPanel({ entries, onDelete }: TranscriptPanelProps) {
+export function TranscriptPanel({ entries, onDelete, speakingId }: TranscriptPanelProps) {
   const newestFirst = useMemo(() => [...entries].reverse(), [entries])
 
   return (
@@ -59,6 +61,14 @@ export function TranscriptPanel({ entries, onDelete }: TranscriptPanelProps) {
                 {TRANSLATION_ENABLED && entry.translationError ? (
                   <span className="chip chip--warn">
                     {translationErrorText(entry.translationError.code)}
+                  </span>
+                ) : null}
+                {TRANSLATION_ENABLED && entry.voiceError ? (
+                  <span className="chip chip--warn">{voiceErrorText(entry.voiceError.code)}</span>
+                ) : null}
+                {entry.id === speakingId ? (
+                  <span className="chip chip--speaking" aria-label="Speaking">
+                    speaking
                   </span>
                 ) : null}
                 <span className="transcript-meta__spacer" />
