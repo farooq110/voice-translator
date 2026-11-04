@@ -100,10 +100,17 @@ def test_event_serialization_shapes() -> None:
     err = ErrorEvent(code="x", message="y")
     assert err.model_dump() == {
         "type": "error", "v": 1, "code": "x", "message": "y",
-        "fatal": False, "utterance_id": None,
+        "fatal": False, "utterance_id": None, "speaker": None,
     }
     attributed = ErrorEvent(code="x", message="y", utterance_id="c_0001_ab12cd")
     assert attributed.utterance_id == "c_0001_ab12cd"
+    # Phase 5 (ADR-0014): cross-participant errors carry the speaker tag;
+    # wire serialization omits null fields (absent ≡ null, additive).
+    assert "speaker" not in err.model_dump_json(exclude_none=True)
+    assert (
+        ErrorEvent(code="x", message="y", speaker="guest").model_dump_json(exclude_none=True)
+        == '{"type":"error","v":1,"code":"x","message":"y","fatal":false,"speaker":"guest"}'
+    )
 
     tr = TranscriptionEvent(id="u_1", text="hi", language="en", language_probability=0.9,
                             audio_duration_s=1.0, processing_ms=5)

@@ -27,21 +27,29 @@ export interface VoiceErrorInfo {
   code: string
 }
 
-/** Any transcript entry that can carry a translation outcome. */
+/** Any transcript entry that can carry a translation outcome. `speaker` is
+ * Phase 5 (ADR-0014): utterance ids are only unique PER CONNECTION, so
+ * outcomes are matched against BOTH the id and the speaker (undefined on
+ * both sides in solo mode — the exact Phase 3/4 matching). */
 export interface TranslationCarrier {
   id: string
+  speaker?: string
   translation?: TranslationInfo
   translationError?: TranslationErrorInfo
   voiceError?: VoiceErrorInfo
 }
 
-/** Attach a `translation` event to exactly its utterance (by id). */
+function sameUtterance(entry: TranslationCarrier, id: string, speaker: string | undefined): boolean {
+  return entry.id === id && (entry.speaker ?? undefined) === (speaker ?? undefined)
+}
+
+/** Attach a `translation` event to exactly its utterance (by id + speaker). */
 export function applyTranslationEvent<T extends TranslationCarrier>(
   entries: readonly T[],
   event: TranslationEvent,
 ): T[] {
   return entries.map((entry) =>
-    entry.id === event.id
+    sameUtterance(entry, event.id, event.speaker)
       ? {
           ...entry,
           translation: {
@@ -70,14 +78,15 @@ export function isTranslationErrorCode(code: string): boolean {
   return TRANSLATION_ERROR_CODES.includes(code)
 }
 
-/** Attach a translation error to exactly its utterance (by id). */
+/** Attach a translation error to exactly its utterance (by id + speaker). */
 export function applyTranslationError<T extends TranslationCarrier>(
   entries: readonly T[],
   utteranceId: string,
   code: string,
+  speaker?: string,
 ): T[] {
   return entries.map((entry) =>
-    entry.id === utteranceId ? { ...entry, translationError: { code } } : entry,
+    sameUtterance(entry, utteranceId, speaker) ? { ...entry, translationError: { code } } : entry,
   )
 }
 
@@ -95,14 +104,15 @@ export function isVoiceErrorCode(code: string): boolean {
   return VOICE_ERROR_CODES.includes(code)
 }
 
-/** Attach a voice error to exactly its utterance (by id). */
+/** Attach a voice error to exactly its utterance (by id + speaker). */
 export function applyVoiceError<T extends TranslationCarrier>(
   entries: readonly T[],
   utteranceId: string,
   code: string,
+  speaker?: string,
 ): T[] {
   return entries.map((entry) =>
-    entry.id === utteranceId ? { ...entry, voiceError: { code } } : entry,
+    sameUtterance(entry, utteranceId, speaker) ? { ...entry, voiceError: { code } } : entry,
   )
 }
 

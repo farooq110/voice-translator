@@ -152,7 +152,8 @@ def test_flush_utterance_id_echoed_on_error(client: TestClient) -> None:
         ws.send_json({"v": 1, "type": "flush"})
         err2 = ws.receive_json()
         assert err2["code"] == "nothing_to_transcribe"
-        assert err2["utterance_id"] is None
+        # Phase 5 serialization: null fields are omitted (absent ≡ null)
+        assert err2.get("utterance_id") is None
 
 
 def test_ping_pong_echo(client: TestClient) -> None:

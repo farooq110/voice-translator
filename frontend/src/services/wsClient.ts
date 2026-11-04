@@ -18,7 +18,7 @@ import {
   pingMessage,
   ProtocolError,
 } from '../types/protocol'
-import type { AudioEvent, ClientMessage, HelloConfig, ServerEvent } from '../types/protocol'
+import type { AudioEvent, ClientMessage, HelloConfig, RelayEvent, ServerEvent } from '../types/protocol'
 
 export type WsStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'closed' | 'error'
 
@@ -30,6 +30,9 @@ export interface WsClientHandlers {
    * `onEvent` — it is paired with the NEXT binary frame (WebSocket ordering
    * guarantees it follows) and delivered here as one playable unit. */
   onAudio?: (meta: AudioEvent, pcm: ArrayBuffer) => void
+  /** Phase 5 (ADR-0014): same pairing contract for the pass-through
+   * `relay` event (original audio for the OTHER participant). */
+  onRelay?: (meta: RelayEvent, pcm: ArrayBuffer) => void
 }
 
 export interface WsClientOptions {
@@ -65,10 +68,10 @@ export class TranslatorWsClient {
   private pongTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private droppedChunks = 0
-  /** Phase 4: metadata of the most recent `audio` event, waiting for its
-   * binary frame (overwritten with a warning if a protocol violation ever
-   * interleaves). */
-  private pendingAudio: AudioEvent | null = null
+  /** Phase 4/5: metadata of the most recent `audio` OR `relay` event,
+   * waiting for its binary frame (overwritten with a warning if a protocol
+   * violation ever interleaves). */
+  private pendingMedia: { kind: 'audio' | 'relay'; meta: AudioEvent | RelayEvent } | null = null
   private strayBinaryFrames = 0
 
   constructor(private readonly options: WsClientOptions) {}
@@ -155,26 +158,30 @@ export class TranslatorWsClient {
     if (event_.type === 'pong') {
       this.clearPongTimer()
     }
-    if (event_.type === 'audio') {
-      // Pair with the following binary frame (delivered via onAudio).
-      if (this.pendingAudio !== null) {
-        console.warn('[ws] audio metadata arrived without its binary frame — replaced')
+    if (event_.type === 'audio' || event_.type === 'relay') {
+      // Pair with the following binary frame (delivered via onAudio/onRelay).
+      if (this.pendingMedia !== null) {
+        console.warn('[ws] media metadata arrived without its binary frame — replaced')
       }
-      this.pendingAudio = event_
+      this.pendingMedia = { kind: event_.type, meta: event_ }
       return
     }
     this.options.handlers.onEvent(event_)
   }
 
   private handleBinaryFrame(data: ArrayBuffer): void {
-    const meta = this.pendingAudio
-    this.pendingAudio = null
-    if (meta === null) {
+    const pending = this.pendingMedia
+    this.pendingMedia = null
+    if (pending === null) {
       // Not part of the protocol today — ignore without crashing.
       this.strayBinaryFrames += 1
       return
     }
-    this.options.handlers.onAudio?.(meta, data)
+    if (pending.kind === 'audio') {
+      this.options.handlers.onAudio?.(pending.meta as AudioEvent, data)
+    } else {
+      this.options.handlers.onRelay?.(pending.meta as RelayEvent, data)
+    }
   }
 
   private sendJson(message: ClientMessage): void {
@@ -219,7 +226,7 @@ export class TranslatorWsClient {
       this.clearTimers()
       this.ready = false
       this.ws = null
-      this.pendingAudio = null
+      this.pendingMedia = null
       if (this.manualClose) {
         this.setStatus('closed')
         return

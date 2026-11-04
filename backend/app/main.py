@@ -30,8 +30,9 @@ from .translation import TranslationService, build_translation_service
 from .tts import TTSService, build_tts_service
 from .ws.audio_ws import router as audio_router
 from .ws.backpressure import SttQueue
+from .ws.rooms import RoomManager
 
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.5.0"
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -49,6 +50,7 @@ def create_app(
     configure_logging(settings.log_level)
 
     sessions = SessionManager(max_sessions=settings.max_sessions)
+    rooms = RoomManager(linger_seconds=settings.room_linger_seconds)
     provider = stt if stt is not None else build_stt_provider(settings)
     vad_pipeline: UtterancePlanner = vad if vad is not None else SileroVAD(
         enabled=settings.vad_gate_enabled,
@@ -72,6 +74,7 @@ def create_app(
         app.state.vad = vad_pipeline
         app.state.stt_queue = stt_queue
         app.state.sessions = sessions
+        app.state.rooms = rooms
         app.state.translator = translation
         app.state.tts = tts_service
         # The WS endpoint reads settings from app.state so that injected
@@ -92,10 +95,10 @@ def create_app(
         tts_warmup = asyncio.create_task(asyncio.to_thread(tts_service.warmup))
         app.state.tts_warmup = tts_warmup
         logger.info(
-            "app started version=%s env=%s stt=%s model=%s device=%s vad=%s translation=%s tts=%s",
+            "app started version=%s env=%s stt=%s model=%s device=%s vad=%s translation=%s tts=%s rooms_linger_s=%.0f",
             APP_VERSION, settings.app_env, provider.name, settings.stt_model,
             settings.stt_device, vad_pipeline.describe(), translation.describe(),
-            tts_service.describe(),
+            tts_service.describe(), settings.room_linger_seconds,
         )
         try:
             yield
@@ -113,7 +116,7 @@ def create_app(
     app = FastAPI(
         title="AI Voice Translator",
         version=APP_VERSION,
-        summary="Real-time voice translation — Phase 4: TTS + browser audio playback",
+        summary="Real-time voice translation — Phase 5: complete browser MVP (two participants)",
         lifespan=lifespan,
     )
 

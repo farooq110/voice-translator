@@ -182,3 +182,46 @@ describe('voice errors (Phase 4, ADR-0013)', () => {
     expect(voiceErrorText('mystery')).toBe('mystery')
   })
 })
+
+describe('Phase 5 speaker-aware matching (ADR-0014)', () => {
+  interface Line extends TranslationCarrier {
+    text: string
+  }
+  const ownLine: Line = { id: 'c_0001', speaker: undefined, text: 'own' }
+  const peerLine: Line = { id: 'c_0001', speaker: 'host', text: 'peer' }
+  const lines: Line[] = [ownLine, peerLine]
+
+  it('matches a translation to (id, speaker) — colliding ids stay separate', () => {
+    const event = {
+      v: 1, type: 'translation' as const, id: 'c_0001', speaker: 'host' as const,
+      text: '[fake:ur→en] x', source_language: 'ur', target_language: 'en',
+      provider: 'fake', duration_ms: 12,
+    }
+    const updated = applyTranslationEvent(lines, event)
+    expect(updated[0]?.translation).toBeUndefined()
+    expect(updated[1]?.translation?.text).toBe('[fake:ur→en] x')
+  })
+
+  it('matches solo events (no speaker on both sides) — the Phase 3/4 behavior', () => {
+    const soloLines: Line[] = [{ id: 'c_0001', speaker: undefined, text: 'own' }]
+    const event = {
+      v: 1, type: 'translation' as const, id: 'c_0001',
+      text: '[fake:ur→en] x', source_language: 'ur', target_language: 'en',
+      provider: 'fake', duration_ms: 12,
+    }
+    const updated = applyTranslationEvent(soloLines, event)
+    expect(updated[0]?.translation?.text).toBe('[fake:ur→en] x')
+  })
+
+  it('attaches voice errors to the right speaker line', () => {
+    const updated = applyVoiceError(lines, 'c_0001', 'tts_unsupported_language', 'host')
+    expect(updated[0]?.voiceError).toBeUndefined()
+    expect(updated[1]?.voiceError?.code).toBe('tts_unsupported_language')
+  })
+
+  it('attaches translation errors to the right speaker line', () => {
+    const updated = applyTranslationError(lines, 'c_0001', 'translation_timeout', 'host')
+    expect(updated[0]?.translationError).toBeUndefined()
+    expect(updated[1]?.translationError?.code).toBe('translation_timeout')
+  })
+})

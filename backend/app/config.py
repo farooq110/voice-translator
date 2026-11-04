@@ -113,6 +113,12 @@ class Settings(BaseSettings):
     max_sessions: int = 50
     cors_origins: str = ""
 
+    # --- Two-participant rooms (Phase 5, ADR-0014) ---
+    # How long an empty room survives after its last member leaves — the
+    # reconnection window in which a dropped client can rejoin with the same
+    # invite code. 0 disables lingering (rooms die with their last member).
+    room_linger_seconds: float = 120.0
+
 
 @lru_cache
 def get_settings() -> Settings:

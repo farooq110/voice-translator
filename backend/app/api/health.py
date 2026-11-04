@@ -38,6 +38,9 @@ async def health(request: Request) -> dict[str, object]:
         payload["uptime_s"] = round(time.time() - started_at, 1)
     if sessions is not None:
         payload["sessions"] = sessions.stats()
+    rooms = getattr(state, "rooms", None)
+    if rooms is not None:
+        payload["rooms"] = rooms.stats()
     if stt is not None:
         payload["stt"] = stt.describe()
     vad = getattr(state, "vad", None)

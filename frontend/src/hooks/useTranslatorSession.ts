@@ -1,14 +1,20 @@
 /**
- * useTranslatorSession — all app state for Phase 1 in one hook.
+ * useTranslatorSession — all app state in one hook (Phase 1 → Phase 5).
  *
  * Owns: WS client lifecycle, microphone capture, language preferences
- * (persisted to localStorage), transcripts, errors, mic level, elapsed time.
+ * (persisted to localStorage), transcripts, errors, mic level, elapsed time,
+ * and — Phase 5 (ADR-0014) — the two-participant room: invite code, peer
+ * presence, speaker-attributed transcripts and the remote-playback guard
+ * that prevents the device microphone from re-capturing the other
+ * participant's audio (feedback-loop prevention).
+ *
  * Business logic stays out of the UI components (master prompt: separate
- * business logic from UI).
+ * business logic from UI); pure helpers live in services/ and are unit-tested.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DEFAULT_NATIVE_LANGUAGE, DEFAULT_PREFERRED_LANGUAGE } from '../config/languages'
+import { ROOMS_ENABLED } from '../config/flags'
 import {
   MicCaptureError,
   TARGET_SAMPLE_RATE,
@@ -18,6 +24,7 @@ import {
 import { TranslatorWsClient, type WsStatus } from '../services/wsClient'
 import { FlushTracker } from '../services/flushTracker'
 import { SpeechPlayer, type PlaybackState } from '../services/playback'
+import { PlaybackGuard } from '../services/playbackGuard'
 import { surfaceNoSpeechError } from '../services/noSpeechPolicy'
 import {
   applyTranslationError,
@@ -32,12 +39,18 @@ import {
 import type {
   HelloConfig,
   ServerEvent,
+  SpeakerRole,
   SttInfo,
   TranslationDecision,
 } from '../types/protocol'
 
 export interface TranscriptEntry extends TranslationCarrier {
   id: string
+  /** Phase 5: who spoke this line (absent in solo mode / Phase 1–4 shape). */
+  speaker?: SpeakerRole
+  /** Stable key: utterance ids are unique per CONNECTION, so playback and
+   * deletion address lines by (speaker, id) — "host:c_0001_ab12cd". */
+  key: string
   text: string
   language: string
   languageProbability: number
@@ -56,11 +69,23 @@ export interface AppError {
   message: string
 }
 
+/** Phase 5: the room as this client sees it (from `ready` + `peer` events). */
+export interface RoomState {
+  code: string
+  role: SpeakerRole
+  nativeLanguage: string
+  preferredLanguage: string
+}
+
 const MAX_TRANSCRIPTS = 50
 const LS_NATIVE = 'vt.native_language'
 const LS_PREFERRED = 'vt.preferred_language'
 const LS_HANDS_FREE = 'vt.hands_free'
 const LS_PLAYBACK = 'vt.playback'
+
+/** Fatal room errors stop the reconnect loop: re-helloing with a dead or
+ * full room can never succeed — the user needs a fresh invite instead. */
+const ROOM_FATAL_CODES: readonly string[] = ['room_not_found', 'room_full', 'room_required']
 
 // --- Sentence endpointing (client-side energy gate, ADR-0007) ---------------
 //
@@ -112,6 +137,21 @@ const AUDIO_FORMAT: HelloConfig['audio'] = {
   encoding: 'pcm_s16le',
   sample_rate: TARGET_SAMPLE_RATE,
   channels: 1,
+}
+
+/** Invite code from the URL (`?room=CODE`) — a guest opens the shared link. */
+function readInviteCode(): string | null {
+  try {
+    if (typeof window === 'undefined') return null
+    const code = new URLSearchParams(window.location.search).get('room')
+    return code !== null && /^[A-Za-z0-9]{4,10}$/.test(code) ? code.toUpperCase() : null
+  } catch {
+    return null
+  }
+}
+
+function lineKey(speaker: SpeakerRole | undefined, id: string): string {
+  return speaker === undefined ? id : `${speaker}:${id}`
 }
 
 function loadStoredLanguage(key: string, fallback: string): string {
@@ -179,10 +219,19 @@ export interface SessionState {
   queuedAudioCount: number
   /** Stops the current + queued audio (keeps future utterances audible). */
   stopPlayback: () => void
-  /** Removes one sentence bubble from the transcript panel. */
-  deleteTranscript: (id: string) => void
+  /** Removes one sentence bubble from the transcript panel (by entry key). */
+  deleteTranscript: (key: string) => void
   toggleRecording: () => void
   dismissError: () => void
+  // --- Phase 5 (ADR-0014): two-participant room ---
+  /** This connection's room role (null until the server confirms). */
+  role: SpeakerRole | null
+  /** True when the URL carried a ?room= invite (guest candidate). */
+  isGuest: boolean
+  /** The room as confirmed by the server (code + the host's language pair). */
+  room: RoomState | null
+  /** Whether the OTHER participant is currently connected. */
+  peerConnected: boolean
 }
 
 export function useTranslatorSession(wsUrl: string): SessionState {
@@ -208,6 +257,11 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     loadStoredFlag(LS_PLAYBACK, true),
   )
   const [playback, setPlayback] = useState<PlaybackState>({ activeId: null, waitingCount: 0 })
+  // --- Phase 5 room state ---
+  const [role, setRole] = useState<SpeakerRole | null>(null)
+  const [room, setRoom] = useState<RoomState | null>(null)
+  const [peerConnected, setPeerConnected] = useState(false)
+  const isGuest = ROOMS_ENABLED && readInviteCode() !== null
 
   const clientRef = useRef<TranslatorWsClient | null>(null)
   const captureRef = useRef<CaptureHandle | null>(null)
@@ -221,9 +275,9 @@ export function useTranslatorSession(wsUrl: string): SessionState {
   /** BUG-001: per-utterance attribution of in-flight decodes. Each flush is
    * registered with a client-generated id + whether it contained speech; the
    * server echoes the id on every transcription/error, so each outcome
-   * settles exactly its own utterance (no shared-ref races). The
-   * Transcribing… indicator is DERIVED from this map — a stuck state is
-   * structurally impossible. */
+   * settles exactly this utterance (no shared-ref races). The Transcribing…
+   * indicator is DERIVED from this map — a stuck state is structurally
+   * impossible. Peer utterances (other speaker) never touch this tracker. */
   const inFlightRef = useRef<FlushTracker>(new FlushTracker())
   const flushSeqRef = useRef(0)
   /** Phase 4: TTS playback queue — created once, injected AudioContext only
@@ -232,16 +286,33 @@ export function useTranslatorSession(wsUrl: string): SessionState {
   if (playerRef.current === null) {
     playerRef.current = new SpeechPlayer(undefined, playbackEnabled, setPlayback)
   }
-  const configRef = useRef<HelloConfig>({
-    native_language: nativeLanguage,
-    preferred_language: preferredLanguage,
-    audio: AUDIO_FORMAT,
-  })
-  configRef.current = {
-    native_language: nativeLanguage,
-    preferred_language: preferredLanguage,
-    audio: AUDIO_FORMAT,
-  }
+  /** Phase 5: feedback-loop guard — muted uplink while REMOTE audio plays. */
+  const guardRef = useRef<PlaybackGuard>(new PlaybackGuard())
+  /** Phase 5: this connection's role, readable inside stable callbacks. */
+  const roleRef = useRef<SpeakerRole | null>(null)
+  /** Phase 5: the host's current room code — re-sent on reconnect so the
+   * server re-attaches this client to ITS room (linger window). */
+  const lastRoomCodeRef = useRef<string | null>(null)
+  const playbackEnabledRef = useRef(playbackEnabled)
+  playbackEnabledRef.current = playbackEnabled
+
+  const configRef = useRef<HelloConfig>(
+    ROOMS_ENABLED && isGuest
+      ? { role: 'guest', room: readInviteCode() ?? undefined, audio: AUDIO_FORMAT }
+      : { native_language: nativeLanguage, preferred_language: preferredLanguage, audio: AUDIO_FORMAT },
+  )
+  configRef.current =
+    ROOMS_ENABLED && isGuest
+      ? { role: 'guest', room: readInviteCode() ?? undefined, audio: AUDIO_FORMAT }
+      : {
+          ...(ROOMS_ENABLED ? { role: 'host' as const } : {}),
+          native_language: nativeLanguage,
+          preferred_language: preferredLanguage,
+          ...(ROOMS_ENABLED && lastRoomCodeRef.current !== null
+            ? { room: lastRoomCodeRef.current }
+            : {}),
+          audio: AUDIO_FORMAT,
+        }
 
   /** Flush the current segment with a fresh correlation id (BUG-001). The
    * Transcribing… indicator turns on only for flushes that carried speech —
@@ -286,76 +357,103 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     await finalizeRecording()
   }, [finalizeRecording])
 
-  const handleEvent = useCallback(
-    (event: ServerEvent) => {
-      if (event.type === 'ready') {
-        setSttInfo(event.stt)
-        setSessionId(event.session_id)
-        return
+  const handleEvent = useCallback((event: ServerEvent) => {
+    if (event.type === 'ready') {
+      setSttInfo(event.stt)
+      setSessionId(event.session_id)
+      if (event.room) {
+        roleRef.current = event.room.role
+        setRole(event.room.role)
+        setRoom({
+          code: event.room.code,
+          role: event.room.role,
+          nativeLanguage: event.room.native_language,
+          preferredLanguage: event.room.preferred_language,
+        })
+        setPeerConnected(event.room.peers > 0)
+        if (event.room.role === 'host') {
+          // Reconnect safety: re-hello re-attaches to THIS room.
+          lastRoomCodeRef.current = event.room.code
+        }
       }
-      if (event.type === 'transcription') {
-        const entry: TranscriptEntry = {
-          id: event.id,
-          text: event.text,
-          language: event.language,
-          languageProbability: event.language_probability,
-          processingMs: event.processing_ms,
-          audioDurationS: event.audio_duration_s,
-          lowConfidence: event.low_confidence,
-          at: Date.now(),
-          decision: event.decision,
-        }
-        setTranscripts((prev) => [...prev.slice(-(MAX_TRANSCRIPTS - 1)), entry])
-        // BUG-001: settle exactly the utterance this result belongs to —
-        // unknown ids (server auto-flush) settle nothing.
-        setTranscribing(inFlightRef.current.settle(event.id))
-        return
+      return
+    }
+    if (event.type === 'peer') {
+      setPeerConnected(event.event === 'joined')
+      return
+    }
+    if (event.type === 'transcription') {
+      const mine = event.speaker === undefined || event.speaker === roleRef.current
+      const entry: TranscriptEntry = {
+        id: event.id,
+        speaker: event.speaker,
+        key: lineKey(event.speaker, event.id),
+        text: event.text,
+        language: event.language,
+        languageProbability: event.language_probability,
+        processingMs: event.processing_ms,
+        audioDurationS: event.audio_duration_s,
+        lowConfidence: event.low_confidence,
+        at: Date.now(),
+        decision: event.decision,
       }
-      if (event.type === 'translation') {
-        // Phase 3 (ADR-0012): attach the translated text to ITS utterance —
-        // the line already settled its Transcribing… state.
-        setTranscripts((prev) => applyTranslationEvent(prev, event))
-        return
-      }
-      if (event.type === 'error') {
-        // Utterance-scoped translation AND voice failures never touch the
-        // global banner nor the indicator — they are attached to the line,
-        // original/translated text kept (Phase 3 + Phase 4).
-        if (isTranslationErrorCode(event.code)) {
-          const id = event.utterance_id
-          if (id !== undefined) {
-            setTranscripts((prev) => applyTranslationError(prev, id, event.code))
-          }
-          return
-        }
-        if (isVoiceErrorCode(event.code)) {
-          const id = event.utterance_id
-          if (id !== undefined) {
-            setTranscripts((prev) => applyVoiceError(prev, id, event.code))
-          }
-          return
-        }
-        // BUG-001: attribute the error to ITS flush via the echoed
-        // utterance_id — never to whichever flush happened to be last.
-        const errorId = event.utterance_id
-        const hadSpeech = errorId !== undefined ? inFlightRef.current.hadSpeech(errorId) : undefined
-        // Outcomes for silence-only flushes (VAD gate rejections, drains,
-        // backpressure drops) are expected — settle quietly, no banner.
-        if (hadSpeech === false) {
-          if (errorId !== undefined) setTranscribing(inFlightRef.current.settle(errorId))
-          return
-        }
-        // A no_speech_detected is only noteworthy when its own flush carried
-        // real speech the server did not recognize (see noSpeechPolicy.ts).
-        if (event.code === 'no_speech_detected' && !surfaceNoSpeechError(hadSpeech === true)) {
-          return
-        }
-        if (errorId !== undefined) setTranscribing(inFlightRef.current.settle(errorId))
+      setTranscripts((prev) => [...prev.slice(-(MAX_TRANSCRIPTS - 1)), entry])
+      if (!mine) return // peer utterance — never touches our in-flight state
+      // BUG-001: settle exactly the utterance this result belongs to —
+      // unknown ids (server auto-flush) settle nothing.
+      setTranscribing(inFlightRef.current.settle(event.id))
+      return
+    }
+    if (event.type === 'translation') {
+      // Phase 3 (ADR-0012): attach the translated text to ITS utterance —
+      // matched by id + speaker (ids collide across participants).
+      setTranscripts((prev) => applyTranslationEvent(prev, event))
+      return
+    }
+    if (event.type === 'error') {
+      // Phase 5: an unusable room can never succeed by retrying — stop the
+      // reconnect loop and surface the reason (the user needs a new invite).
+      if (ROOM_FATAL_CODES.includes(event.code)) {
+        clientRef.current?.close()
         setError({ code: event.code, message: event.message })
+        return
       }
-    },
-    [],
-  )
+      // Utterance-scoped translation AND voice failures never touch the
+      // global banner nor the indicator — they are attached to the line,
+      // original/translated text kept (Phase 3 + Phase 4 + Phase 5).
+      if (isTranslationErrorCode(event.code)) {
+        const id = event.utterance_id
+        if (id !== undefined) {
+          setTranscripts((prev) => applyTranslationError(prev, id, event.code, event.speaker))
+        }
+        return
+      }
+      if (isVoiceErrorCode(event.code)) {
+        const id = event.utterance_id
+        if (id !== undefined) {
+          setTranscripts((prev) => applyVoiceError(prev, id, event.code, event.speaker))
+        }
+        return
+      }
+      // BUG-001: attribute the error to ITS flush via the echoed
+      // utterance_id — never to whichever flush happened to be last.
+      const errorId = event.utterance_id
+      const hadSpeech = errorId !== undefined ? inFlightRef.current.hadSpeech(errorId) : undefined
+      // Outcomes for silence-only flushes (VAD gate rejections, drains,
+      // backpressure drops) are expected — settle quietly, no banner.
+      if (hadSpeech === false) {
+        if (errorId !== undefined) setTranscribing(inFlightRef.current.settle(errorId))
+        return
+      }
+      // A no_speech_detected is only noteworthy when its own flush carried
+      // real speech the server did not recognize (see noSpeechPolicy.ts).
+      if (event.code === 'no_speech_detected' && !surfaceNoSpeechError(hadSpeech === true)) {
+        return
+      }
+      if (errorId !== undefined) setTranscribing(inFlightRef.current.settle(errorId))
+      setError({ code: event.code, message: event.message })
+    }
+  }, [])
 
   // WS client lifecycle (connect on mount, clean close on unmount).
   useEffect(() => {
@@ -369,16 +467,41 @@ export function useTranslatorSession(wsUrl: string): SessionState {
           setError({ code: 'protocol_error', message: protocolError.message }),
         // Phase 4: synthesized speech arrives as metadata + binary pair.
         onAudio: (meta, pcm) => {
-          playerRef.current?.enqueue(meta, pcm)
+          const remote = meta.speaker !== undefined && meta.speaker !== roleRef.current
+          const key = lineKey(meta.speaker, meta.id)
+          const accepted = playerRef.current?.enqueue(
+            { id: key, language: meta.language, sample_rate: meta.sample_rate },
+            pcm,
+          )
+          // Feedback-loop guard: mute OUR uplink while the OTHER side's voice
+          // is audible (ADR-0014, master prompt scenario 12). Own TTS (solo
+          // playback) never arms the guard.
+          if (remote && accepted === true && playbackEnabledRef.current) {
+            guardRef.current.onRemoteClip(meta.duration_ms)
+          }
+        },
+        // Phase 5: the peer's ORIGINAL third-language audio, relayed as
+        // captured — always remote, always guards the uplink.
+        onRelay: (meta, pcm) => {
+          const key = lineKey(meta.speaker, meta.id)
+          const accepted = playerRef.current?.enqueue(
+            { id: key, language: meta.language, sample_rate: meta.sample_rate },
+            pcm,
+          )
+          if (accepted === true && playbackEnabledRef.current) {
+            guardRef.current.onRemoteClip(meta.duration_ms)
+          }
         },
       },
     })
     clientRef.current = client
     client.connect()
+    const guard = guardRef.current // stable for the effect's lifetime
     return () => {
       client.close()
       clientRef.current = null
       playerRef.current?.stopAll()
+      guard.clear()
     }
   }, [wsUrl, handleEvent])
 
@@ -397,6 +520,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
       // Phase 4: cancel outdated audio — nothing queued for a dead session
       // may keep playing once the connection is gone.
       playerRef.current?.stopAll()
+      guardRef.current.clear()
       setError({
         code: 'connection_lost',
         message: 'Connection lost — recording stopped. Speak again once reconnected.',
@@ -428,10 +552,16 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     try {
       const handle = await startMicCapture({
         onChunk: (chunk) => {
+          // Feedback-loop guard (ADR-0014): while the other participant's
+          // audio is audible on THIS device, do not feed the loop — drop the
+          // uplink chunk (the endpointing state below stays consistent
+          // because onLevel skips accumulation for the same window).
+          if (guardRef.current.isGuarded()) return
           clientRef.current?.sendAudioChunk(chunk)
         },
         onLevel: (rms) => {
           setMicLevel(rms)
+          if (guardRef.current.isGuarded()) return
           // Sentence endpointing: track speech/pause from the chunk RMS and
           // flush the server buffer at every natural pause (ADR-0007).
           // BUG-002: in push-to-talk mode (hands-free OFF) pause-based
@@ -510,19 +640,21 @@ export function useTranslatorSession(wsUrl: string): SessionState {
   const setPlaybackEnabled = useCallback((on: boolean) => {
     setPlaybackEnabledState(on)
     playerRef.current?.setEnabled(on) // muting cancels scheduled audio
+    if (!on) guardRef.current.clear() // nothing will play — unmute the uplink
     storeFlag(LS_PLAYBACK, on)
   }, [])
 
   const stopPlayback = useCallback(() => {
     playerRef.current?.stopAll()
+    guardRef.current.clear() // user stopped the audio — uplink is safe again
   }, [])
 
   const dismissError = useCallback(() => setError(null), [])
 
-  const deleteTranscript = useCallback((id: string) => {
-    setTranscripts((prev) => prev.filter((entry) => entry.id !== id))
+  const deleteTranscript = useCallback((key: string) => {
+    setTranscripts((prev) => prev.filter((entry) => entry.key !== key))
     // Cancellation of outdated audio: a deleted line stops being spoken.
-    playerRef.current?.cancel(id)
+    playerRef.current?.cancel(key)
   }, [])
 
   return {
@@ -551,5 +683,9 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     deleteTranscript,
     toggleRecording,
     dismissError,
+    role,
+    isGuest,
+    room,
+    peerConnected,
   }
 }
