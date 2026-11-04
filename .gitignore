@@ -38,3 +38,6 @@ Thumbs.db
 .idea/
 .vscode/
 tool-results/
+
+# --- Platform runtime artifacts (auto-checkpoint guard) ---
+.zscripts/

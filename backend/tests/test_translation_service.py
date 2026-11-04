@@ -136,9 +136,31 @@ def test_describe_reports_configuration() -> None:
     assert info == {
         "enabled": True,
         "provider": "fake",
+        "mode": "deterministic-stub",  # provider describe() merged (BUG-003)
         "detect_mode": "auto",
         "timeout_s": 1.5,
         "rate_limit_per_minute": 7,
         "max_concurrent": 3,
     }
     service.aclose()
+
+
+def test_describe_surfaces_provider_pairs(tmp_path) -> None:
+    """BUG-003 regression: a zero-pair local deployment must be VISIBLE via
+    /health — the service describe() has to surface the provider's own
+    describe() fields (at minimum "pairs"), never hide them."""
+    from app.translation.local_ct2 import LocalCT2Provider
+
+    pair_dir = tmp_path / "ur-en"
+    pair_dir.mkdir()
+    (pair_dir / "model.bin").write_bytes(b"stub")
+    service = _service(provider=LocalCT2Provider(tmp_path))
+    info = service.describe()
+    assert info["provider"] == "local-opus-mt"
+    assert info["pairs"] == ["ur/en"]
+    assert info["compute_type"] == "int8"
+    # and the empty case — the exact BUG-003 shape:
+    empty = _service(provider=LocalCT2Provider(tmp_path / "none-here"))
+    assert empty.describe()["pairs"] == []
+    service.aclose()
+    empty.aclose()

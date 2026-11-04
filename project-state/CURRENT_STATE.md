@@ -1,6 +1,6 @@
 # CURRENT_STATE
 
-_Last updated: 2026-11-01 — Phase 3 complete (translation decision engine, ADR-0012)_
+_Last updated: 2026-11-03 — Phase 3 complete + QA BUG-003 fix round (v0.3.1)_
 
 ## Phase
 
@@ -14,7 +14,21 @@ waits for the user's explicit branch-named instruction (strict rule §2).
 
 ## Current task
 
-None — Phase 3 finished. The decision engine implements the master prompt
+QA BUG-003 fix round complete (2026-11-03; see KI-013, CHANGELOG 0.3.1).
+The independent QA verdict was FAIL — the deployed instance could not
+translate because `models/translation/` is a git-ignored runtime artifact
+that nothing provisioned, and `/health` hid the zero-pair state. Fixed:
+`start.sh` now provisions the four CT2 OPUS-MT pairs idempotently on first
+boot (loud, non-fatal failure); `TranslationService.describe()` surfaces the
+provider fields (`pairs`, `compute_type`, `beam_size`); `docs/deployment.md`
+§4.1 documents provisioning + footprint. Verified: backend 130+1xfail (new
+regression test), `/health` lists all four pairs, live E2E translation 3/3
+with real MT (113–168 ms), synthetic 3/3, silence guard PASS, continuous
+speech 5/5 ≤ 4.0 s. APP_VERSION 0.3.1. Phase 3 is re-submitted for
+acceptance; **Phase 4 (TTS + browser audio playback) awaits explicit
+approval (master prompt §23)**.
+
+Background — Phase 3 delivery: the decision engine implements the master prompt
 Rules 1–4 for any configured pair; detection is "detect-first,
 pin-the-decode" (standalone detect_language + ur/hi cluster + threshold,
 then ONE pinned decode — the full auto-decode was measured unusable for

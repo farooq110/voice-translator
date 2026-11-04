@@ -196,9 +196,17 @@ class TranslationService:
         self._executor.shutdown(wait=False, cancel_futures=True)
 
     def describe(self) -> dict[str, object]:
+        # Surface the provider's own describe() fields (BUG-003 observability
+        # fix): at minimum "pairs" — so a zero-pair deployment (models never
+        # provisioned) is VISIBLE in /health instead of looking healthy.
+        provider_info: dict[str, object] = (
+            dict(self.provider.describe())
+            if self.provider is not None
+            else {"provider": None}
+        )
         return {
             "enabled": self.enabled,
-            "provider": self.provider.name if self.provider is not None else None,
+            **provider_info,
             "detect_mode": self.detect_mode,
             "timeout_s": self._timeout_s,
             "rate_limit_per_minute": self.rate_limit_per_minute,

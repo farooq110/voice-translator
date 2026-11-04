@@ -30,7 +30,7 @@ from .translation import TranslationService, build_translation_service
 from .ws.audio_ws import router as audio_router
 from .ws.backpressure import SttQueue
 
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.3.1"
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

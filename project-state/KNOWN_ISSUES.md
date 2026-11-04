@@ -266,6 +266,40 @@ Format: description / reproduction / root cause / fix / verification / status.
   gtx bot-wall, argos index 404, ct2fast 401).
 - **Status:** OPEN (accepted for Phase 3; honest quality claims only).
 
+## KI-013 — RESOLVED: deployed instance cannot translate — MT models never provisioned (QA BUG-003, HIGH)
+
+- **Description:** on any fresh git-based deployment every Rule-1/Rule-2
+  utterance was transcribed and detected correctly, but the decision came
+  back `passthrough/unsupported_pair` — the UI showed "pass-through · pair
+  unavailable" and no translation was ever produced (independent QA verdict:
+  FAIL, 2026-11-03).
+- **Reproduction:** fresh checkout + `bash start.sh` → `/health` reported the
+  translation block "healthy" (enabled, provider local-opus-mt) while zero
+  pairs existed; speak English with ur→en config → pair-unavailable chip.
+- **Root cause:** the local provider discovers its pairs by scanning
+  `models/translation/<src>-<tgt>/` at startup; that directory is a
+  git-ignored runtime artifact and nothing recreated it during deployment —
+  `start.sh` provisioned only the Whisper STT model. Aggravated by an
+  observability gap: `TranslationService.describe()` omitted the provider's
+  own describe() fields, so a zero-pair deployment looked perfectly healthy
+  in `/health`.
+- **Fix (v0.3.1):** (1) `start.sh` provisions the four OPUS-MT pairs via
+  `backend/scripts/download_translation_models.py` (idempotent, ~600 MB)
+  whenever `models/translation/` is empty and `TRANSLATION_PROVIDER=local`;
+  a provisioning failure logs a loud ERROR but does not kill the app (STT/VAD
+  keep working, degradation stays honest). (2) `TranslationService.describe()`
+  now merges the provider's describe() — `/health` exposes `pairs`,
+  `compute_type`, `beam_size`. (3) `docs/deployment.md` gained §4.1
+  (provisioning + footprint), env-var rows and troubleshooting entries.
+- **Verification:** backend 130 passed + 1 xfail (new regression test
+  `test_describe_surfaces_provider_pairs` covers the populated and the
+  empty-pairs shapes); `/health` lists `pairs: [en/es, en/ur, es/en, ur/en]`;
+  live E2E translation 3/3 with real MT (ur→en 113 ms, en→ur 168 ms, es
+  pass-through); Phase 2 regressions green (synthetic 3/3, silence guard
+  PASS, continuous speech 5/5 ≤ 4.0 s); browser smoke not re-run — frontend
+  bundle unchanged (QA verified the identical bundle 10/10).
+- **Status:** RESOLVED (2026-11-03, v0.3.1).
+
 ## KI-005 — RESOLVED: initial TTS fixtures unusable for ur/es
 
 - **Description:** the sandbox's default TTS voices (Chinese-oriented)

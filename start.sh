@@ -49,6 +49,32 @@ fi
 export HF_HOME="${HF_HOME:-${PROJECT_DIR}/models/huggingface}"
 mkdir -p "${HF_HOME}"
 
+# --- Phase 3 (BUG-003 fix): provision offline MT translation models -------
+# The local translation provider discovers its language pairs by scanning
+# models/translation/<src>-<tgt>/ at startup. That directory is a git-ignored
+# runtime artifact, so a fresh checkout starts with ZERO pairs and every
+# translation decision degrades to pass-through ("unsupported_pair"). Fix:
+# provision the models here, idempotently, before the app starts. The script
+# skips files already on disk (~600 MB first run, seconds when present).
+TRANSLATION_PROVIDER_EFF="${TRANSLATION_PROVIDER:-}"
+if [ -z "${TRANSLATION_PROVIDER_EFF}" ] && [ -f backend/.env ]; then
+  TRANSLATION_PROVIDER_EFF="$(sed -n 's/^TRANSLATION_PROVIDER=//p' backend/.env | tail -1 | tr -d '\"'"'"'[:space:]')"
+fi
+TRANSLATION_PROVIDER_EFF="${TRANSLATION_PROVIDER_EFF:-local}"
+if [ "${TRANSLATION_PROVIDER_EFF}" = "local" ]; then
+  if [ ! -d models/translation ] || [ -z "$(ls -A models/translation 2>/dev/null)" ]; then
+    echo "[start.sh] translation models missing -> provisioning via backend/scripts/download_translation_models.py (first boot only, ~600 MB)"
+    if (cd backend && .venv/bin/python scripts/download_translation_models.py); then
+      echo "[start.sh] translation models provisioned"
+    else
+      # Fail LOUDLY but do not kill the app: STT/VAD still work, the local
+      # provider degrades honestly to pass-through, and /health now exposes
+      # translation.pairs=[] so the gap is visible (BUG-003 observability fix).
+      echo "[start.sh] ERROR: translation model provisioning FAILED - local provider will pass through every pair (see /health translation.pairs)" >&2
+    fi
+  fi
+fi
+
 echo "[start.sh] starting app on :${PORT} (HF_HOME=${HF_HOME})"
 cd backend
 .venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port "${PORT}" &

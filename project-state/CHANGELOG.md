@@ -2,6 +2,38 @@
 
 All meaningful project changes. Format based on Keep a Changelog.
 
+## [0.3.1] — QA BUG-003 fix — deployment provisioning + health visibility (2026-11-03)
+
+Input: independent Phase 3 QA report (verdict FAIL — BUG-003 HIGH: deployed
+instance cannot translate, CT2 models never provisioned).
+
+### Fixed
+- **start.sh provisions the offline MT models** (BUG-003 root cause): when
+  `TRANSLATION_PROVIDER=local` and `models/translation/` is empty, the four
+  CT2 OPUS-MT pairs (~600 MB) are downloaded idempotently before uvicorn
+  starts; a provisioning failure logs a loud ERROR without killing the app
+  (STT/VAD keep working; degradation stays honest).
+- **/health reveals pair coverage** (BUG-003 observability gap):
+  `TranslationService.describe()` merges the provider's describe() — a
+  zero-pair deployment now shows `translation.pairs: []` instead of looking
+  healthy.
+- **docs/deployment.md**: new §4.1 (translation model provisioning, pair
+  repos, disk footprint), `TRANSLATION_PROVIDER` / `TRANSLATION_DETECT_MODE`
+  / `TRANSLATION_MODELS_DIR` env rows, the stale "translation/TTS providers
+  arrive in Phases 3/4" data-flow note replaced with the honest per-provider
+  data flow, two new troubleshooting rows (pair-unavailable chip,
+  `translation.pairs: []`).
+
+### Added
+- Regression test `test_describe_surfaces_provider_pairs` (populated and
+  empty-pairs shapes) — backend suite now 130 passed + 1 xfail.
+
+### Verified
+- `/health` lists `pairs: [en/es, en/ur, es/en, ur/en]`; live E2E
+  translation 3/3 with real MT (ur→en 113 ms, en→ur 168 ms, es pass-through);
+  synthetic 3/3; silence guard PASS; continuous speech 5/5 ≤ 4.0 s.
+  APP_VERSION 0.3.1.
+
 ## [0.3.0] — Phase 3 — Translation Decision Engine and Bidirectional Translation (2026-11-01)
 
 Input: user approval "After that start the phase 3 and complete it" (master
