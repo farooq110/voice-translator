@@ -1,9 +1,11 @@
 # AGENT.md — Permanent Instructions for AI Coding Agents
 
 This file contains durable rules for any AI agent (or human developer) working on
-this repository. The full product requirements live in `prompt.md` (the master
-prompt). If this file and `prompt.md` disagree, `prompt.md` wins; propose an
-update to this file if a rule proves impractical.
+this repository. The full product master prompt is maintained by the product
+owner outside the repository; this repo carries the current phase's scope and
+delivery record in `prompt.md` (now Phase 3 — translation decision engine).
+If this file and `prompt.md` disagree on that phase's scope, `prompt.md` wins;
+propose an update to this file if a rule proves impractical.
 
 ---
 
@@ -17,7 +19,8 @@ audio **without translation and without TTS**.
 
 ## 2. Phase discipline (strict)
 
-The roadmap has 10 phases (see `prompt.md` section 17). Work **only** on the
+The roadmap has 10 phases (see the Roadmap table in `README.md`; the current
+phase's scope record is `prompt.md`). Work **only** on the
 currently approved phase.
 
 - Do not start a new phase without explicit user approval.
@@ -87,7 +90,7 @@ Maintain (and update after every meaningful task and at each phase end):
 
 | File | Purpose |
 | --- | --- |
-| `prompt.md` | Master prompt (requirements, roadmap, acceptance criteria) |
+| `prompt.md` | Current phase scope & delivery record (Phase 3 — translation decision engine) |
 | `AGENT.md` | This file — permanent agent instructions |
 | `README.md` | Quickstart, architecture overview, limitations |
 | `docs/architecture.md` | Components, data flow, extension points |
