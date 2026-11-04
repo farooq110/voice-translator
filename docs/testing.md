@@ -375,3 +375,30 @@ Honest TTS quality note: Piper `medium` voices are comprehension-grade, not
 human-equivalent; the Urdu voice is a UAT-dataset model with eSpeak `ur`
 phonemization. Mixed-language Urdu sentences may render anglicisms with an
 Urdu accent. Provider abstraction = upgrade is a settings change.
+---
+
+## 12. Phase 5 — two-participant rooms + audio routing — actual results (2026-11-04, ADR-0014)
+
+All numbers below are from the live :3000 server (real Whisper `small`
+detection, real CTranslate2 OPUS-MT, real Piper voices, real binary PCM
+frames) unless marked otherwise.
+
+| Check | Result | Notes |
+| --- | --- | --- |
+| Backend suite | **171 passed + 1 xfailed** | +16 Phase 5 room tests (`test_ws_rooms.py`): create/join/presence, room codes, guest configures nothing, `room_full`/`room_not_found`/`room_required`, scenario 1+11 (host ur → guest en voice ONLY), scenario 2+11 (guest en → host ur voice ONLY), scenarios 3/4/10 (relay, no TTS anywhere), scenario 5 (same language both ways), scenario 6 (low confidence → passthrough), scenario 7 (confident third language), scenario 9 (failing provider → shared utterance error), scenario 8 (host drop → `peer left` → rejoin same code → routing resumes), linger + destroy (health shows 0 rooms), solo-room Phase 1–4 shape |
+| Frontend suite | **101/101 vitest**, tsc clean, ESLint 0, build clean | +20 Phase 5 tests: protocol parsing (peer/relay/room/speaker + solo tolerance + invalid rejection), wsClient relay pairing (independent from audio pairing, stray-frame counter), speaker-aware translation/voice-error matching (colliding ids), PlaybackGuard (window, queue extension, clear, non-finite duration) |
+| `e2e_phase5_check.py` (two REAL connections, live :3000) | **4/4 PASS** | S1 host ur_greeting → guest: transcript (speaker=host, lang=ur) + translation ur→en (160 ms) + REAL en voice 109 056 B @ 22 050 Hz RMS 0.185 (synth 1 677 ms incl. first-use voice load); host receives transcript+translation ONLY (ping-pong probe) · S2 guest en_hello → host: ur voice 161 792 B RMS 0.172 (synth 568 ms) · S3 host es_hola → guest: ORIGINAL relay 112 644 B @ 16 kHz RMS 0.091, decision `passthrough/third_language`, ZERO translation + ZERO tts on either side · S4 guest ur_greeting (scenario 5, same language both sides) → host en voice 121 856 B RMS 0.200 |
+| Routing honesty (scenario 11) | asserted per utterance | the speaker's stream carries transcript + translation ONLY — probed with a ping that must be answered by the next frame being the pong (any stray audio frame fails the E2E) |
+| Latency (live, 2 vCPU, real models) | flush→transcription ≈ 6.3–7.0 s per 6–7 s fixture utterance (detect pass + pinned decode, consistent with the Phase 3 budget), MT 143–173 ms, voice delivery to the listener 149–1 684 ms (first utterance into a language pays the documented ~1.5 s voice load, KI-014) | rooms add no measurable server latency (same pipeline; one extra broadcast send per event) |
+| Regression: translation E2E (Phase 3 paths) | **3/3 PASS** | Rules 1–3 unchanged |
+| Regression: silence guard | **PASS** | hallucination guard active |
+| `smoke_phase5.mjs` (two real pages, fake mic) | **12/12** | invite-link join, guest view has NO language settings and shows the host's pair (Urdu ↔ English), peer presence flips to connected on BOTH pages, both record + stop with only the honest `no_speech_detected` banner, screenshots captured, zero console/page errors |
+| Regression: `smoke_phase2.mjs` (solo) | **10/10** | the Phase 1–4 solo flow is unchanged (solo room keeps the exact wire shape) |
+
+**Scenario coverage vs master prompt §17 Phase 5:** 1 ✔ (S1), 2 ✔ (S2),
+3 ✔ (S3), 4 ✔ (symmetric relay path, unit-tested for the guest-speaker
+case), 5 ✔ (S4), 6 ✔ (unit + live detector), 7 ✔ (unit), 8 ✔ (unit
+rejoin/linger), 9 ✔ (unit, shared utterance errors), 10 ✔ (S3: zero TTS
+frames), 11 ✔ (S1/S2 ping-pong probes + unit asserts), 12 ✔
+(architectural: no server re-ingestion — asserted; client PlaybackGuard
+unit-tested; real-hardware acoustics remain Phase 6, KI-018).

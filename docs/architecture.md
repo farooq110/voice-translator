@@ -13,7 +13,7 @@ re-architecting.
 │    ├── TranslatorWsClient   hello/ready handshake · binary upload · ping/pong ·        │
 │    │                        reconnect w/ backoff · typed, validated events ·            │
 │    │                        uplink backpressure (drop chunks > 1 MiB buffered) ·        │
-│    │                        audio metadata ⇄ binary frame pairing (P4, ADR-0013)      │
+│    │                        audio/relay metadata ⇄ binary frame pairing (P4/P5)       │
 │    ├── startMicCapture      getUserMedia → AudioContext(16 kHz) → AudioWorklet         │
 │    │                        (pcm-capture: resample → PCM16 → 100 ms chunks + level)    │
 │    ├── SpeechPlayer (P4)    bounded playback queue: sequential Web Audio scheduling    │
@@ -22,17 +22,26 @@ re-architecting.
 │    ├── HandsFreeToggle      VITE_FEATURE_HANDS_FREE-flagged continuous-capture mode    │
 │    ├── PlaybackToggle (P4)  mute spoken translations (persists; cancel-on-mute)        │
 │    │                        (ADR-0009; endpointing runs in both modes — ADR-0007)      │
-│    └── UI components        LanguageSelector · MicButton · LevelMeter ·                │
+│    ├── PlaybackGuard (P5)   feedback-loop prevention: uplink muted while a REMOTE      │
+│    │                        clip (peer voice / relay) is audible (+300 ms tail)        │
+│    └── UI components        LanguageSelector (host only) · MicButton · LevelMeter ·    │
+│                             RoomPanel (P5: invite code + copy link + peer status;      │
+│                             guest variant shows the host's pair, no settings) ·        │
 │                             TranscriptPanel (RTL-aware, per-line ✕, speaking chip,     │
-│                             voice-error chips) · ConnectionBadge · ErrorBanner         │
-│                             ConnectionBadge · ErrorBanner                              │
+│                             voice-error chips, speaker chips) · ConnectionBadge ·      │
+│                             ErrorBanner                                                │
 └───────────────────────────────────────┬────────────────────────────────────────────────┘
                           WebSocket /ws/audio (protocol v1, docs/audio-protocol.md)
 ┌───────────────────────────────────────▼────────────────────────────────────────────────┐
 │                        Backend (Python 3.12 · FastAPI · uv)                            │
 │  ws/audio_ws.py      protocol state machine, framing validation, bounded buffering,    │
-│                      Phase 4: audio event + binary frame sent under one lock           │
-│                      auto-flush at cap, stale-result dropping, per-event timing        │
+│                      audio/relay event + binary frame sent under one lock              │
+│                      auto-flush at cap, stale-result dropping, per-event timing,       │
+│                      Phase 5: room-aware hello/join/rejoin, broadcast of               │
+│                      transcripts+translations (speaker-tagged), recipient-only         │
+│                      voice routing, original-audio pass-through relay, leave/linger    │
+│  ws/rooms.py (P5)    Room + RoomManager — two-participant rooms, 6-char invite codes,  │
+│                      linger-based reconnection (ROOM_LINGER_SECONDS), in-memory only   │
 │  ws/backpressure.py  SttQueue — global decode admission cap → `server_busy` (P2)       │
 │  audio/vad.py        SileroVAD (ONNX bundled w/ faster-whisper): gate → trim →         │
 │                      segment, BEFORE the STT model (P2, ADR-0009)                     │
@@ -45,7 +54,7 @@ re-architecting.
 │                      TTSService = rate limit + concurrency cap + timeout               │
 │  stt/faster_whisper_stt.py  CTranslate2 CPU int8, lazy load, pinned language,          │
 │                      beam search + decode-time VAD (ADR-0006/0007)                     │
-│  api/health.py       /health (status, engines, session stats, vad, stt_queue,          │
+│  api/health.py       /health (status, engines, session stats, rooms, vad, stt_queue,   │
 │                      translation.pairs, tts.languages)                                 │
 │  main.py             app factory (DI: settings/stt/vad/translator/tts), serves dist    │
 └────────────────────────────────────────────────────────────────────────────────────────┘
@@ -73,9 +82,14 @@ re-architecting.
   the worker receives an immutable `bytes` snapshot (`take_buffer` swap-clear).
 - Results for closed/stale sessions are dropped, never delivered; in-flight
   translation AND synthesis tasks are cancelled on disconnect (P3/P4).
-- Server→client audio delivery: the `audio` metadata event and its binary
-  PCM frame are sent under the same per-connection lock, so the pairing can
-  never interleave with another event.
+- Server→client audio delivery: the `audio`/`relay` metadata event and its
+  binary PCM frame are sent under the same per-connection lock, so the
+  pairing can never interleave with another event.
+- **Rooms (P5):** the room layer is pure bookkeeping on the event loop (dict
+  + linger timers) — it never blocks and never touches audio buffers; each
+  connection keeps its own Session/VAD/STT pipeline. Room sends reuse the
+  same per-connection send lock; a failing member never breaks another
+  member's delivery.
 
 ## 3. Memory bounds (Phase 2 guarantees)
 
@@ -86,11 +100,13 @@ re-architecting.
   `STT_MAX_QUEUE_DEPTH` globally (P2) — the executor queue cannot balloon.**
 - **Client uplink: chunks are dropped while the socket send buffer exceeds
   1 MiB (P2) — no unbounded client-side queuing either.**
-- Sessions: ≤ `MAX_SESSIONS`; buffers freed on disconnect.
+- Sessions: ≤ `MAX_SESSIONS`; buffers freed on disconnect. Rooms: ≤
+  MAX_SESSIONS (each member is a session); a room survives ≤
+  `ROOM_LINGER_SECONDS` after its last member leaves, then is destroyed.
 - Transcripts are not retained server-side (only counters/durations in logs);
   client transcript list is capped at 50 entries.
 
-## 4. Language handling (Phase 1 → Phase 4 path)
+## 4. Language handling (Phase 1 → Phase 5 path)
 
 - Phase 1 detects the language for **every** utterance and returns
   `language` + `language_probability` + `low_confidence` — all inputs the
@@ -100,6 +116,10 @@ re-architecting.
 - Phase 4 adds the spoken leg: only `translate` decisions synthesize, in the
   DECISION's target language; pass-through audio is forwarded as captured
   and never regenerated (master prompt §17, ADR-0013).
+- Phase 5 routes the outputs (ADR-0014): decisions are evaluated against the
+  ROOM's pair (the host's) for BOTH participants; voices reach only the
+  other participant; third-language audio is RELAYED as captured (16 kHz) to
+  the peer.
 - Known model quirk (KI-002): Whisper may label short Urdu utterances as
   `hi` (shared Hindustani). The decision engine must treat language identity
   carefully — candidates: script check on the transcription (Arabic vs

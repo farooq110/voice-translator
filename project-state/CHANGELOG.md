@@ -2,6 +2,47 @@
 
 All meaningful project changes. Format based on Keep a Changelog.
 
+## [0.5.0] — Phase 5: complete browser MVP — two participants (2026-11-04)
+
+Input: user approval "start phase 5 and complete it" (2026-11-04).
+
+### Added
+- **Two-participant rooms (ADR-0014)**: the host creates a room at hello
+  (6-char unambiguous invite code) and owns the language pair; the guest
+  joins via the shared `?room=CODE` link and configures nothing. Rooms
+  linger `ROOM_LINGER_SECONDS` (120 s default) after the last member
+  leaves — dropped clients rejoin with the same code — then are destroyed.
+- **Recipient-only audio routing**: transcripts + translations are
+  broadcast to both members with `speaker` tags; synthesized voices reach
+  ONLY the other participant (a solo room falls back to the speaker — the
+  exact Phase 1–4 shape); translation failures are shared utterance-scoped
+  errors; TTS failures reach the audio's intended recipients.
+- **Original-audio pass-through relay**: third-language utterances relay
+  the VAD-trimmed captured audio (16 kHz PCM16, metadata + one binary
+  frame) to the peer — never regenerated with TTS, never replayed to the
+  speaker.
+- **Feedback-loop prevention**: the server never re-ingests delivered
+  audio; the client `PlaybackGuard` drops uplink chunks while a REMOTE clip
+  is audible (+300 ms tail). Own-utterance TTS never arms the guard.
+- Frontend: invite panel (code + copy link), guest view without language
+  settings, speaker chips on the shared transcript, host reconnect re-joins
+  its room, room-fatal errors stop the reconnect loop.
+- `/health` gains `rooms {active, rooms}`.
+
+### Changed
+- Protocol v1 (additive): `hello.config.role`/`.room`, optional language
+  fields (host-validated), `peer` and `relay` events, optional `speaker`
+  tags; null fields omitted on the wire (absent ≡ null); new fatal codes
+  `room_required`, `room_not_found`, `room_full`, `missing_languages`.
+- APP_VERSION 0.4.0 → 0.5.0; start.sh unchanged (voices provisioned since
+  v0.4.0).
+
+### Verified
+- Backend 171 passed + 1 xfailed (+16 room tests); frontend 101/101 vitest,
+  tsc/ESLint/build clean; live two-participant E2E 4/4 (real STT + MT +
+  Piper, routed delivery proven per utterance); translation E2E 3/3;
+  silence guard PASS; two-page browser smoke 12/12; solo smoke 10/10.
+
 ## [0.4.0] — Phase 4: TTS + browser audio playback (2026-11-04)
 
 Input: user approval "start pahse 4 and complete it" (2026-11-04).

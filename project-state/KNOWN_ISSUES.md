@@ -343,3 +343,44 @@ Format: description / reproduction / root cause / fix / verification / status.
 - **Repro:** n/a in sandbox (no real devices).
 - **Status:** OPEN — folded into the Phase 6 real-device matrix (KI-004);
   no compatibility claims are made (AGENT.md § 6 honesty).
+
+## KI-016 — ACCEPTED (Phase 5): transcript line deletion is local-only
+
+- **Description:** deleting a sentence bubble removes it (and stops its
+  playback) on the deleting device only — the other participant keeps the
+  line. There is no cross-device deletion sync in the protocol.
+- **Root cause:** deliberate Phase 5 scope control: a `delete` control
+  message, peer-side cancellation and conflict rules add protocol surface
+  that the master prompt does not require for the MVP.
+- **Status:** ACCEPTED for the MVP; revisit with the meeting-integration
+  phases if shared-moderation becomes a requirement.
+
+---
+
+## KI-017 — ACCEPTED (Phase 5): host language changes apply on the next connection
+
+- **Description:** the room's language pair is captured at the host's
+  `hello` (it is the room's config authority). Changing the selectors
+  mid-room does not re-greet the server; the new pair applies when the
+  host's client reconnects (config is read at connect time — unchanged
+  since Phase 1).
+- **Repro:** open a room, change languages, speak — decisions still use the
+  room's original pair until reconnect.
+- **Status:** ACCEPTED (consistent with the Phase 1–4 config-at-connect
+  behavior); a live re-hello control message is a possible future
+  extension.
+
+---
+
+## KI-018 — OPEN (Phase 6 scope): two-participant acoustics on real hardware
+
+- **Description:** the feedback loop (scenario 12) is prevented
+  architecturally (the server never re-ingests delivered audio — asserted
+  in the room tests and the live E2E) and client-side (PlaybackGuard mutes
+  the uplink while remote audio is audible, unit-tested). What is NOT
+  measured: loudspeaker→mic coupling on real laptop/phone hardware, the
+  guard's effect on natural conversation overlap, and AEC quality across
+  devices.
+- **Repro:** n/a in the sandbox (no real devices).
+- **Status:** OPEN — folded into the Phase 6 real-device matrix (KI-004);
+  no real-hardware acoustic claims are made (AGENT.md § 6 honesty).

@@ -1,35 +1,45 @@
 # CURRENT_STATE
 
-_Last updated: 2026-11-04 — Phase 4 implemented + verified (v0.4.0), pending approval_
+_Last updated: 2026-11-04 — Phase 5 implemented + verified (v0.5.0), pending approval_
 
 ## Phase
 
-**Phase 4 — Text-to-Speech and Browser Audio Playback** — implemented and
-verified (2026-11-04, ADR-0013). Phases 1–3 remain complete (Phase 3 is
-pending its own approval; both were requested together and delivered in one
-working session). Work sits on `main` and is pushed to both `main` and
-`phase-3` per the user's standing delivery instruction.
+**Phase 5 — Complete Browser MVP (two participants)** — implemented and
+verified (2026-11-04, ADR-0014). Phases 1–4 remain complete (Phases 3 and 4
+are pending their own approval records). Work sits on `main` and is pushed
+to `main` and the `phase-5` branch per the user's delivery instruction
+(`PHASE-3.md`/`PHASE-4.md`/`PHASE-5.md` live ONLY on their own branches).
 
 ## Current task
 
-Phase 4 complete: offline Piper TTS (ur/en/es voices under `models/tts/`,
-ADR-0013), bounded TTSService (30/min, ≤1 concurrent, 10 s timeout, 800-char
-cap), additive protocol v1 `audio` metadata event + one binary PCM16 frame
-per translated utterance (metadata+binary sent under one lock), 5 new
-utterance-scoped non-fatal error codes, per-connection synthesis
-cancellation, browser SpeechPlayer (sequential scheduling — overlap
-impossible by construction — bounded queue with oldest-drop and re-basing
-after cancel, mute toggle, autoplay unlock, stop/cancel), /health `tts`
-section, start.sh voice provisioning. Pass-through bypasses TTS (asserted in
-tests, verified live). Verified: backend 155+1xfail, frontend 81/81 +
-typecheck + lint + build, e2e_tts_check 3/3 live (real speech → real MT →
-real synthesis, RMS-checked; es pass-through produced ZERO audio frames),
-translation E2E 3/3, silence guard PASS, browser smoke 10/10. APP_VERSION
-0.4.0. **Phase 5 (complete browser MVP — two-person sessions) awaits
-explicit user approval (master prompt §23).**
+Phase 5 complete: two-participant rooms (ADR-0014) — host creates a room at
+hello (6-char invite code), guest joins via `?room=CODE` and configures
+nothing (the room's pair is the host's); rooms linger 120 s
+(`ROOM_LINGER_SECONDS`) after the last member leaves for reconnection with
+the same code. Protocol v1 stays v1 additively: `hello.role`/`hello.room`,
+`peer` joined/left events, `relay` events (original-audio pass-through,
+16 kHz PCM16, one metadata + one binary frame), optional `speaker` tags on
+transcription/translation/audio/error, fatal `room_required` /
+`room_not_found` / `room_full` / `missing_languages`, `/health rooms`.
+Routing: transcripts + translations broadcast to both members
+(speaker-tagged); synthesized audio delivered ONLY to the other participant
+(solo room falls back to the speaker — exact Phase 1–4 shape); pass-through
+relays the ORIGINAL captured audio to the peer (never TTS, never replayed to
+the speaker). Feedback-loop prevention: no server-side re-ingestion
+(architectural) + client `PlaybackGuard` dropping uplink while remote audio
+plays (+300 ms tail). Frontend: invite link flow, guest view with NO
+language panel, host invite panel (code + copy link + peer status),
+speaker-aware transcript keyed `(speaker, id)`, relay pairing in wsClient.
+Verified: backend **171 passed + 1 xfailed** (+16 room tests), frontend
+**101/101** + tsc + ESLint + build, live two-participant E2E **4/4**
+(real STT + real MT + real Piper voices; routed delivery proven per
+utterance via ping-pong probes), translation E2E 3/3, silence guard PASS,
+`smoke_phase5` **12/12** (two real pages via the invite link),
+`smoke_phase2` 10/10 (solo unchanged). APP_VERSION 0.5.0. **Phase 6 (real
+devices) awaits explicit user approval (master prompt §23).**
 
 ## Next step
 
-Await the user's approval verdict on Phase 3 (v0.3.1) and Phase 4 (v0.4.0).
-On approval of Phase 4, start Phase 5 per the master prompt §17 (two-person
-browser sessions, audio routing, session lifecycle).
+Await the user's approval verdict on Phases 3 (v0.3.1), 4 (v0.4.0) and 5
+(v0.5.0). On approval of Phase 5, start Phase 6 per the master prompt §17
+(mobile/browser compatibility on real devices).

@@ -117,8 +117,23 @@ explicit approval per master prompt §23.
 | P4-06 | Verification: backend **155 passed + 1 xfailed** (+25 tests, incl. `tts_real` real synthesis); frontend **81/81** + tsc + ESLint + build 254.5 kB; live `e2e_tts_check.py` **3/3** (real speech → real MT → real synthesis, RMS-checked; es pass-through → ZERO audio frames); translation E2E 3/3 + silence guard PASS + browser smoke 10/10 (zero console errors) | DONE |
 | P4-07 | Docs: ADR-0013; protocol spec §3b + error table; architecture.md (diagram, threading, language path, testing); deployment.md §4.2 + env vars; testing.md §11; README (status/diagram/limitations/roadmap); prompt.md (Phase 4 record); DECISIONS D-015; CHANGELOG 0.4.0; CURRENT_STATE; APP_VERSION 0.4.0 | DONE |
 
-## Phase 5+ — see `prompt.md` section 17
+## Phase 5 — Complete Browser MVP (Two Participants) — COMPLETE (pending approval)
 
-Two-person MVP (P5), mobile compatibility (P6), Zoom (P7), extension (P8),
+Approval: user message "start phase 5 and complete it" (2026-11-04) —
+explicit approval per master prompt §23.
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P5-01 | Room model (ADR-0014): `app/ws/rooms.py` Room + RoomManager (6-char unambiguous invite codes, in-memory, 120 s linger + rejoin, `ROOM_LINGER_SECONDS`), room-aware hello (host creates/rejoins, guest joins configuring nothing), `peer` joined/left events, fatal `room_required`/`room_not_found`/`room_full`/`missing_languages`, leave/linger cleanup, `/health rooms` — 16 WS room tests (scenarios 1–11 with fakes) | DONE |
+| P5-02 | Routing: transcripts + translations broadcast to both members with `speaker` tags; synthesized audio ONLY to the other participant (solo fallback = exact Phase 1–4 shape); translation failures shared, TTS failures to the audio's recipients, STT errors speaker-local; pass-through relay of the ORIGINAL captured audio (16 kHz, never TTS, never replayed to the speaker); guest decoded against the host's pair | DONE |
+| P5-03 | Protocol v1 additive: optional `role`/`room` in hello + optional language fields (validated), `speaker` on transcription/translation/audio/error, `RelayEvent` + binary pairing, null fields omitted (absent ≡ null, documented); frontend protocol parser extended | DONE |
+| P5-04 | Frontend: invite-link flow (`?room=CODE`), guest view with NO language panel + host's pair, host invite panel (code + copy link + peer status), speaker-aware transcript keyed (speaker, id) with Guest/Host chips, wsClient relay pairing, room-fatal errors stop reconnect, host rejoin via stored code | DONE |
+| P5-05 | Feedback-loop prevention (scenario 12): server never re-ingests output audio (asserted) + client `PlaybackGuard` dropping uplink while REMOTE audio plays (+300 ms tail; own-utterance TTS never arms it) — 6 unit tests | DONE |
+| P5-06 | Verification: backend **171 passed + 1 xfailed**; frontend **101/101** + tsc + ESLint + build; live `e2e_phase5_check.py` **4/4** (two real connections, real STT/MT/Piper: routed voice only to the listener, relay without TTS, same-language both ways); translation E2E 3/3 + silence guard PASS; `smoke_phase5.mjs` **12/12** (invite-link join, guest sees no settings, both record, zero console errors); `smoke_phase2.mjs` 10/10 | DONE |
+| P5-07 | Docs: ADR-0014; README (status/diagram/limitations/roadmap); protocol spec (rooms/peer/relay/speaker + error table); architecture.md; testing.md §12; deployment.md (ROOM_LINGER_SECONDS); prompt.md (Phase 5 record); DECISIONS D-016; KNOWN_ISSUES KI-016/017/018; CHANGELOG 0.5.0; CURRENT_STATE; APP_VERSION 0.5.0; branch-local PHASE-5.md (phase-5 branch only) | DONE |
+
+## Phase 6+ — see `prompt.md` section 17
+
+Mobile compatibility on real devices (P6), Zoom (P7), extension (P8),
 more apps (P9), production (P10). All `TODO` and **blocked until the
 respective phase is approved**.

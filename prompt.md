@@ -1,177 +1,119 @@
-# prompt.md — Phase 4 Scope & Delivery Record
+# prompt.md — Phase 5 Scope & Delivery Record
 
-**Phase:** 4 of 10 — Text-to-Speech and Browser Audio Playback
+**Phase:** 5 of 10 — Complete Browser MVP (two participants)
 **Status:** implemented — full verification round complete — **pending user approval** (§23 workflow)
-**Version:** v0.4.0
-**ADR:** [docs/decisions/0013-tts-offline-piper.md](docs/decisions/0013-tts-offline-piper.md)
+**Version:** v0.5.0
+**ADR:** [docs/decisions/0014-two-participant-rooms.md](docs/decisions/0014-two-participant-rooms.md)
 
 > This repository documents the **current phase only** in this file. The
 > complete master prompt (25 sections, 10-phase roadmap, approval workflow)
 > is maintained by the product owner outside the repository. The overall
 > delivery roadmap and phase statuses live in
 > [README.md § Roadmap](README.md#roadmap-master-prompt-17); durable agent
-> rules live in [AGENT.md](AGENT.md).
+> rules live in [AGENT.md](AGENT.md). Branch-local deep dives: `PHASE-3.md`
+> (phase-3 branch), `PHASE-4.md` (phase-4 branch), `PHASE-5.md` (phase-5
+> branch) — each documents only its own phase.
 
 ---
 
-## 1. Phase 4 scope (master prompt §17)
+## 1. Phase 5 scope (master prompt §17)
 
-Implement:
+Complete the pipeline:
 
-- TTS provider abstraction.
-- Urdu TTS evaluation and integration.
-- English TTS evaluation and integration.
-- Target-language speech generation.
-- Browser-compatible audio output.
-- Audio playback.
-- Playback queue management.
-- Prevention of overlapping audio.
-- Cancellation of outdated audio.
-- Provider failure handling.
+**Microphone → VAD → STT → Language Detection → Translation Decision →
+Translation (when required) → TTS (when required) → Audio Routing →
+Browser Playback**
 
-**Original audio pass-through must bypass TTS.** Test actual generated
-audio (no mocked-only claims — AGENT.md § 6).
+Requirements:
 
-## 2. Engine decision (ADR-0013)
+- Two-person browser sessions.
+- Only translator user configures language preferences.
+- Automatic source-language detection.
+- Correct translation decision.
+- Correct original audio pass-through.
+- Correct translated audio delivery.
+- Session creation and cleanup.
+- Cancellation of outdated processing.
+- Network reconnection.
+- Error recovery.
+- Latency measurements.
 
-**Piper** — offline VITS voices on ONNX Runtime, which the backend already
-ships for faster-whisper: no torch, no API keys, no GPU, audio never leaves
-the machine. MIT-licensed voices provisioned under `models/tts/<lang>/`
-(git-ignored runtime artifact, idempotently provisioned by `start.sh`,
-~190 MB for the three languages). Measured on 2 vCPU: synthesis RTF
-≈ 0.06–0.08 warm; the FIRST synthesis into a language pays ~1.5 s of lazy
-voice load (documented trade-off).
+Test scenarios (master prompt §17 Phase 5): 1. translator speaks native ·
+2. other speaks preferred · 3. translator speaks third language · 4. other
+speaks third language · 5. both speak the same language · 6. low detection
+confidence · 7. unsupported language detected · 8. network interruption ·
+9. STT/translation/TTS provider failure · 10. pass-through without TTS ·
+11. translated audio reaches only the intended recipient · 12. no feedback
+loop.
 
-Provisioned voices: `ur_PK-fasih-medium` (Urdu, 22 050 Hz),
-`en_US-lessac-medium` (English), `es_MX-ald-medium` (Spanish — covers the
-Phase 3 `es↔en` pair). A missing voice is an honest, visible degradation —
-never a wrong-language voice.
+## 2. Design (ADR-0014)
 
-## 3. Non-negotiables applied to this phase
+- **Rooms.** The host creates a room at `hello` (6-char invite code, e.g.
+  `TTQJRJ`); the guest joins via the shared link `?room=CODE` and
+  configures nothing — the room's language pair IS the host's pair.
+  In-memory `RoomManager`, rooms linger 120 s (`ROOM_LINGER_SECONDS`) after
+  the last member leaves so a dropped connection rejoins with the same
+  code; then the room is destroyed.
+- **Protocol v1 stays v1 (additive):** `hello.config.role` + `.room`,
+  `peer` events (joined/left), `relay` events (original-audio pass-through:
+  one metadata JSON + one binary PCM16 frame @ 16 kHz), optional `speaker`
+  tags on transcription/translation/audio/error (present only in room
+  mode); new fatal codes `room_required` / `room_not_found` / `room_full` /
+  `missing_languages`; `/health` gains `rooms`.
+- **Routing.** Transcripts + translations are broadcast to BOTH members
+  (speaker-tagged); synthesized speech goes ONLY to the other participant
+  (a solo room falls back to the speaker — the exact Phase 1–4 behavior);
+  pass-through relays the ORIGINAL captured audio to the peer (never TTS,
+  never replayed to the speaker); translation failures are shared
+  utterance-scoped errors, TTS failures reach the audio's recipients,
+  STT-level errors stay speaker-local.
+- **Feedback-loop prevention.** Server-side: output audio is never
+  re-ingested. Client-side: `PlaybackGuard` drops uplink while a REMOTE
+  clip is audible (+300 ms tail); own-utterance TTS (solo) never arms it.
+  Browser AEC stays enabled.
 
-- **Offline by default**: local Piper synthesis, no keys, no network at
-  inference time; cloud TTS remains possible via the provider abstraction
-  (an explicit settings change, never the default).
-- **Pass-through bypasses TTS**: only `translate` decisions (Rules 1–2)
-  synthesize — asserted in WS-flow tests and verified live (the es fixture
-  produces ZERO audio frames).
-- **Replaceable providers**: `TTSProvider` interface with `piper` (default),
-  `fake` (deterministic sine stub for tests), `none`; the WebSocket layer is
-  provider-agnostic.
-- **Bounded resources**: 30 syntheses/min sliding window, ≤ 1 concurrent,
-  10 s hard timeout on a dedicated single-thread executor, 800-char text
-  cap — no unbounded memory or runaway work.
-- **Honest degradation**: every synthesis failure is a non-fatal,
-  utterance-scoped protocol error; the translated TEXT is always kept.
-- **Testing honesty**: every claim below maps to an executed test or probe
-  (§ 6).
+## 3. Delivery record (what was built)
 
-## 4. Delivered — v0.4.0
+Backend: `app/ws/rooms.py` (Room, RoomManager, linger); `audio_ws.py`
+room-aware hello/join/rejoin, `_broadcast_text`, `_audio_recipients`,
+`_send_error_to`, pass-through relay, room-aware effective config
+(guest decoded against the host's pair), leave/linger cleanup; protocol
+models (`RoomInfo`, `PeerEvent`, `RelayEvent`, `speaker` tags, optional
+languages with validation); `ROOM_LINGER_SECONDS` setting; `/health rooms`.
 
-- **TTS provider abstraction** (`backend/app/tts/`): `base.py` (ABC +
-  typed errors), `piper_local.py` (lazy per-language voice load, discovery
-  by scanning `models/tts/<lang>/*.onnx`), `fake.py` (deterministic sine
-  provider, seeded per (language, text)), `service.py` (bounded execution:
-  rate limit, concurrency, timeout, outcomes — mirrors
-  `TranslationService`).
-- **Protocol v1 additive change** (no breaking change): `audio` JSON
-  metadata event (`id`, `language`, `encoding=pcm_s16le`, `sample_rate`,
-  `bytes`, `duration_ms`, `synthesis_ms`, `provider`) followed by exactly
-  one binary frame of raw PCM16 mono — the pairing rides WebSocket
-  ordering; metadata + binary are sent under the same per-connection lock.
-  5 new utterance-scoped non-fatal error codes: `tts_failed`,
-  `tts_timeout`, `tts_rate_limited`, `tts_unsupported_language`,
-  `tts_text_too_long`.
-- **Cancellation of outdated synthesis**: per-connection task tracking;
-  in-flight syntheses are cancelled on disconnect (mirrors Phase 3
-  translation cancellation); results for closed sockets are dropped.
-- **Browser playback** (`frontend/src/services/playback.ts`):
-  `SpeechPlayer` over the Web Audio API — Int16→Float32 conversion,
-  strictly SEQUENTIAL scheduling (each clip starts at
-  `max(now, previous end)` — overlap impossible by construction), bounded
-  queue (4 pending clips, oldest dropped when full, remaining clips
-  re-based so a cancelled/dropped clip never leaves silence), `cancel(id)`
-  (line deleted), `stopAll()` (connection lost / user stop / mute),
-  AudioContext unlocked on the mic gesture (autoplay policy).
-- **wsClient pairing**: the `audio` metadata event is paired with the next
-  binary frame and delivered as one unit (`onAudio`); stray binary frames
-  are counted, never crash; pending metadata is cleared on close.
-- **UI**: "Spoken translations" toggle (persists to localStorage; muting
-  cancels scheduled audio), a pulsing `speaking` chip on the audible line,
-  per-line voice-error chips (`no voice for this language · text kept`,
-  …), and a `stop voice` button while audio is playing.
-- **Observability**: `/health` now exposes the full `tts` section
-  (provider, languages, voices, timeout, rate limit, concurrency, text
-  cap) — a voice-less deployment is visible instead of falsely healthy
-  (BUG-003 lesson applied to TTS). `start.sh` provisions voices
-  idempotently and fails loudly.
+Frontend: invite link flow (`?room=CODE` → guest mode with NO language
+panel, room panel with the host's pair), host invite panel (code + copy
+link + peer status), speaker-aware transcript (entries keyed
+`(speaker, id)`, "Guest"/"Host" chips, RTL intact), wsClient relay pairing,
+PlaybackGuard + uplink drop while remote audio plays, room-fatal errors
+stop the reconnect loop, host reconnect re-sends its room code.
 
-## 5. Verification (all executed, not claimed)
+Tests: `test_ws_rooms.py` (16 room-level tests covering scenarios
+1–11 with fakes), protocol/translation/wsClient/playbackGuard test
+extensions, `scripts/e2e_phase5_check.py` (real two-connection E2E),
+`frontend/scripts/smoke_phase5.mjs` (two real pages).
 
-- Backend: **155 passed + 1 xfailed** (`pytest`) — +25 Phase 4 tests:
-  service bounds (timeout / rate limit / concurrency=1 / unsupported /
-  too-long / disabled), provider discovery (incl. broken-voice rejection),
-  WS flow (audio+binary pairing with size/RMS/duration assertions,
-  pass-through bypass with `tts.calls == 0`, failure / unsupported /
-  rate-limit error mapping, disabled keeps the Phase 3 shape), health
-  exposure.
-- `tts_real` marked test: real ur/en/es synthesis through
-  `PiperTTSProvider` (RMS > 0.05, duration bounds, 22 050 Hz).
-- Frontend: **81/81 vitest**, `tsc --noEmit` clean, ESLint 0 problems;
-  production build 254.5 kB JS. +24 Phase 4 tests: SpeechPlayer
-  (sequential scheduling, queue bound, re-basing after cancel, mute,
-  autoplay resume), wsClient pairing (+ stray frame counter, stale-meta
-  clear on close), `audio` event parsing (incl. rejects), voice-error
-  helpers.
-- **E2E TTS check 3/3 PASS** (`scripts/e2e_tts_check.py`, live server):
-  Rule 1 ur→en — translation 109 ms, spoken English 2 577 ms of audio
-  synthesized in 1 573 ms (first-use voice load included), PCM RMS 0.191,
-  binary size = `bytes`; Rule 2 en→ur — 157 ms, spoken Urdu 3 424 ms of
-  audio in 546 ms, RMS 0.188; Rule 3 es — pass-through with ZERO audio
-  frames (TTS bypassed).
-- Live regression: translation E2E **3/3 PASS**, silence guard **PASS**,
-  browser smoke **10/10** (zero console errors) after the playback UI.
-- Measured live synthesis (warm, in the Rule 2 probe): 3.4 s of Urdu audio
-  in 546 ms (RTF ≈ 0.16 incl. load; 0.06–0.08 steady-state).
+## 4. Verification (measured 2026-11-04)
 
-## 6. Known limitations (honest list)
-
-- Piper `medium` voices are comprehension-grade, not human-equivalent; the
-  Urdu voice (UAT dataset, eSpeak `ur` phonemization) can render
-  anglicisms with an Urdu accent in mixed-language sentences.
-- First synthesis into a language pays ~1.5 s of lazy voice load (later
-  sentences are RTF ≈ 0.06–0.08); a startup warm-load of all voices would
-  trade ~4.5 s boot time + ~300 MB RSS for zero first-use latency — not
-  chosen.
-- Playback is desktop-browser verified (headless Chromium smoke + unit
-  tests with an injected fake AudioContext); real-device audio behavior
-  (iOS Safari low-power mode, background tabs) is **Phase 6** scope.
-- Pass-through speech is intentionally never regenerated — the other
-  participant hears the ORIGINAL audio for third languages (spec rule),
-  not a voiced rendition of its transcript.
-- Real-device testing (Android Chrome / iOS Safari) remains **Phase 6**.
-
-## 7. Phase status & approval (master prompt §23)
-
-Workflow applied: `COMPLETE → TEST → FIX → VERIFY ACCEPTANCE CRITERIA →
-DOCUMENT → REPORT → REQUEST APPROVAL`.
-
-| Acceptance criterion (§17) | Status |
+| Check | Result |
 | --- | --- |
-| TTS provider abstraction | ✅ verified (code + tests, 3 providers) |
-| Urdu TTS evaluation and integration | ✅ verified (real synthesis, RMS-checked) |
-| English TTS evaluation and integration | ✅ verified (real synthesis, E2E) |
-| Target-language speech generation | ✅ verified (speaks the DECISION target, both directions) |
-| Browser-compatible audio output | ✅ verified (PCM16 + Web Audio, autoplay unlock) |
-| Audio playback | ✅ verified (live E2E + smoke) |
-| Playback queue management | ✅ verified (bounded queue, oldest-drop, unit tests) |
-| Prevention of overlapping audio | ✅ verified (sequential scheduling — structurally impossible) |
-| Cancellation of outdated audio | ✅ verified (line delete / stop / mute / disconnect) |
-| Provider failure handling | ✅ verified (5 non-fatal utterance-scoped codes, text kept) |
-| Pass-through bypasses TTS | ✅ verified (WS tests + live E2E: zero audio frames) |
-| Actual generated audio tested | ✅ RMS/duration/size assertions, real voices |
+| Backend suite | **171 passed + 1 xfailed** (+16 Phase 5 room tests; the previously-skipped `tts_real` test now runs with provisioned voices) |
+| Frontend suite | **101/101 vitest** (+20: protocol parsing, relay pairing, speaker matching, PlaybackGuard), tsc clean, ESLint 0, build clean |
+| `e2e_phase5_check.py` (live :3000, real models) | **4/4 PASS** — S1 host ur → guest en voice (RMS 0.185, synth 1 677 ms incl. first-load), host receives NO audio · S2 guest en → host ur voice (RMS 0.172) · S3 host es → guest ORIGINAL relay 112 644 B @ 16 kHz RMS 0.091, zero TTS · S4 guest ur (same language both sides) → host en voice (RMS 0.200) |
+| Routing honesty (scenario 11) | asserted per utterance via ping-pong probes: the speaker's stream carries transcript + translation ONLY |
+| Latency (live, 2 vCPU) | flush→transcription ≈ 6.3–7.0 s per fixture utterance (real decode incl. detect pass), MT 143–173 ms, voice delivery 149–1 684 ms (first-load documented, KI-014) |
+| Regression: translation E2E (Phase 3 paths) | **3/3 PASS** |
+| Regression: silence guard | **PASS** |
+| Browser smoke `smoke_phase5.mjs` (two pages) | **12/12** — invite link join, guest has NO language settings, peer presence both sides, both record, zero console errors |
+| Regression: browser smoke `smoke_phase2.mjs` | **10/10** (solo flow unchanged) |
 
-**Current status:** implemented and fully verified (unit + WS-flow + real
-synthesis + live E2E + browser smoke). **Phase 5 (complete browser MVP —
-two-person sessions) has NOT been started** and will not start without the
-user's explicit approval.
+## 5. Honest boundaries
+
+- The acoustic feedback loop (scenario 12) is prevented architecturally
+  (no server re-ingestion — asserted) and client-side (PlaybackGuard,
+  unit-tested); real-room acoustic behavior on real hardware is a Phase 6
+  measurement (KI-004/KI-015).
+- Transcript line deletion is local-only (not synced to the peer) —
+  KI-016. Host language changes apply on the next connection — KI-017.
+- Rooms are in-memory and single-process — restarting the server ends all
+  rooms (Phase 10 scope for persistence).
