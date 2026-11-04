@@ -311,3 +311,35 @@ Format: description / reproduction / root cause / fix / verification / status.
   correct (see docs/testing.md §4).
 - **Verification:** `uv run pytest -m stt_real` — 3 passed + 1 xfail.
 - **Status:** RESOLVED (recorded for provenance of fixture choice).
+
+---
+
+## KI-014 — ACCEPTED: first synthesis into a language pays the voice load (Phase 4)
+
+- **Description:** the first translated utterance into a language with no
+  loaded voice takes ~1.5 s longer (Piper voice lazy-load, measured in the
+  live E2E: Rule 1 synthesis 1 573 ms incl. load vs 546 ms for the second
+  language).
+- **Root cause:** `PiperTTSProvider.ensure_loaded()` is a deliberate no-op —
+  eager loading of all three voices would cost ~4.5 s of boot time and
+  ~300 MB RSS for latency the user rarely notices (synthesis is otherwise
+  RTF ≈ 0.06–0.08).
+- **Fix / mitigation:** documented trade-off (ADR-0013); the load happens
+  during the user's own utterance decode + translation window, so perceived
+  delay is minimal; `/health` shows provisioned languages so missing voices
+  are visible.
+- **Status:** ACCEPTED (revisit if a future phase needs guaranteed
+  constant synthesis latency).
+
+---
+
+## KI-015 — OPEN (Phase 6 scope): audio playback untested on real devices
+
+- **Description:** spoken-output playback is verified in headless Chromium
+  (smoke 10/10) and by unit tests with an injected fake AudioContext, but
+  iOS Safari (low-power mode blocks autoplay, silent-switch behavior),
+  Android Chrome battery saver and background-tab/lock-screen audio are
+  unmeasured.
+- **Repro:** n/a in sandbox (no real devices).
+- **Status:** OPEN — folded into the Phase 6 real-device matrix (KI-004);
+  no compatibility claims are made (AGENT.md § 6 honesty).

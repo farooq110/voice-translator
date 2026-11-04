@@ -102,8 +102,23 @@ Approval: user message "After that start the phase 3 and complete it"
 | P3-07 | Verification: backend **128 passed + 1 xfail** (incl. `translation_real` — real ur→en/en→ur through CT2 models); frontend tsc/lint/**57 tests**/build clean; live `e2e_translation_check.py` **3/3** (Rules 1–3 with real MT); continuous speech **5/5 ≤ 4.0 s** with the detect pass; synthetic 3/3; silence guard PASS; browser smoke **10/10** | DONE |
 | P3-08 | Docs: ADR-0012; protocol spec §3a; testing.md §2/§3/§10; .env.example; README (status/architecture/limitations); KI-002 update + KI-012; DECISIONS D-014; CHANGELOG 0.3.0; CURRENT_STATE; APP_VERSION 0.3.0 | DONE |
 
-## Phase 4+ — see `prompt.md` section 17
+## Phase 4 — Text-to-Speech and Browser Audio Playback — COMPLETE (pending approval)
 
-TTS + playback (P4), two-person MVP (P5), mobile compatibility (P6), Zoom
-(P7), extension (P8), more apps (P9), production (P10). All `TODO` and
-**blocked until the respective phase is approved**.
+Approval: user message "start pahse 4 and complete it" (2026-11-04) —
+explicit approval per master prompt §23.
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P4-01 | TTS engine evaluation + decision: Piper (offline VITS on onnxruntime — already shipped for faster-whisper; no torch/keys/GPU); voices ur_PK-fasih / en_US-lessac / es_MX-ald (22 050 Hz) measured RTF 0.06–0.08 on 2 vCPU | DONE |
+| P4-02 | TTSProvider abstraction (`app/tts/base.py`) + `piper_local.py` (lazy per-language load, discovery) + `fake.py` (deterministic sine, seeded) + `none`; bounded `TTSService` (30/min sliding window, ≤1 concurrent, 10 s timeout, 800-char cap, dedicated executor) — 12 service tests | DONE |
+| P4-03 | Protocol v1 additive: `audio` metadata event + exactly one binary PCM16 frame (metadata+binary under one send lock); 5 utterance-scoped non-fatal codes (`tts_failed/timeout/rate_limited/unsupported_language/text_too_long`); synthesis task tracking + cancellation on disconnect; pass-through NEVER reaches TTS (asserted) | DONE |
+| P4-04 | Frontend: wsClient audio⇄binary pairing (stray-frame counter, stale-meta clear), SpeechPlayer (sequential Web Audio scheduling — overlap impossible, bounded queue w/ oldest-drop + re-base after cancel, mute cancels, autoplay unlock on mic gesture, stop-all), "Spoken translations" toggle (persisted), speaking chip + voice-error chips + stop-voice button | DONE |
+| P4-05 | Ops: `scripts/download_tts_voices.py` (idempotent, ~190 MB), `start.sh` provisioning step (loud failure), `/health` `tts` section (provider/languages/voices/bounds) | DONE |
+| P4-06 | Verification: backend **155 passed + 1 xfailed** (+25 tests, incl. `tts_real` real synthesis); frontend **81/81** + tsc + ESLint + build 254.5 kB; live `e2e_tts_check.py` **3/3** (real speech → real MT → real synthesis, RMS-checked; es pass-through → ZERO audio frames); translation E2E 3/3 + silence guard PASS + browser smoke 10/10 (zero console errors) | DONE |
+| P4-07 | Docs: ADR-0013; protocol spec §3b + error table; architecture.md (diagram, threading, language path, testing); deployment.md §4.2 + env vars; testing.md §11; README (status/diagram/limitations/roadmap); prompt.md (Phase 4 record); DECISIONS D-015; CHANGELOG 0.4.0; CURRENT_STATE; APP_VERSION 0.4.0 | DONE |
+
+## Phase 5+ — see `prompt.md` section 17
+
+Two-person MVP (P5), mobile compatibility (P6), Zoom (P7), extension (P8),
+more apps (P9), production (P10). All `TODO` and **blocked until the
+respective phase is approved**.

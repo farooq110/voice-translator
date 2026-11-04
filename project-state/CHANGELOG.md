@@ -2,6 +2,46 @@
 
 All meaningful project changes. Format based on Keep a Changelog.
 
+## [0.4.0] — Phase 4: TTS + browser audio playback (2026-11-04)
+
+Input: user approval "start pahse 4 and complete it" (2026-11-04).
+
+### Added
+- **Offline TTS engine (ADR-0013)**: Piper voices (VITS on onnxruntime —
+  already shipped for faster-whisper; no torch/keys/GPU) for Urdu
+  (`ur_PK-fasih-medium`), English (`en_US-lessac-medium`) and Spanish
+  (`es_MX-ald-medium`) under `models/tts/<lang>/` (~190 MB, git-ignored),
+  provisioned idempotently by `start.sh` (loud failure) and by
+  `backend/scripts/download_tts_voices.py`.
+- **TTS provider abstraction** (`backend/app/tts/`): `piper` (default, lazy
+  per-language load), `fake` (deterministic sine stub), `none`; bounded
+  `TTSService` — 30 syntheses/min sliding window, ≤1 concurrent, 10 s hard
+  timeout, 800-char text cap, dedicated single-thread executor.
+- **Protocol v1 additive**: `audio` JSON metadata event followed by exactly
+  one binary PCM16 frame (22 050 Hz) per translated utterance — sent under
+  the same per-connection lock; 5 new utterance-scoped non-fatal error
+  codes (`tts_failed`, `tts_timeout`, `tts_rate_limited`,
+  `tts_unsupported_language`, `tts_text_too_long`); synthesis tasks
+  cancelled on disconnect.
+- **Browser playback (ADR-0013)**: `SpeechPlayer` — strictly sequential Web
+  Audio scheduling (overlap impossible by construction), bounded queue
+  (4 clips, oldest dropped, remaining re-based — no silent gaps), cancel on
+  line delete, stop-all on connection loss/user stop/mute, AudioContext
+  unlocked on the mic gesture; "Spoken translations" toggle (persisted),
+  pulsing `speaking` chip, per-line voice-error chips, `stop voice` button.
+- **/health `tts` section** (provider, languages, voices, bounds) — a
+  voice-less deployment is visible (BUG-003 lesson applied to TTS).
+- `scripts/e2e_tts_check.py` — live E2E: real speech → real MT → real
+  synthesis with PCM RMS/duration/size assertions; pass-through must
+  produce ZERO audio frames.
+
+### Verification
+Backend 155 passed + 1 xfailed (+25 tests incl. `tts_real` real synthesis);
+frontend 81/81 vitest + tsc + ESLint + build 254.5 kB; e2e_tts_check 3/3
+PASS live (spoken en 2 577 ms audio in 1 573 ms incl. first voice load;
+spoken ur 3 424 ms in 546 ms; es pass-through bypassed TTS); translation
+E2E 3/3; silence guard PASS; browser smoke 10/10.
+
 ## [0.3.1] — QA BUG-003 fix — deployment provisioning + health visibility (2026-11-03)
 
 Input: independent Phase 3 QA report (verdict FAIL — BUG-003 HIGH: deployed

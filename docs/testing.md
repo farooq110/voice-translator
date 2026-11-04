@@ -14,6 +14,9 @@ cd backend && uv run pytest -m "not stt_real"
 # Real-model STT tests (needs model + fixtures; skipped if absent)
 cd backend && HF_HOME=../models/huggingface uv run pytest -m stt_real
 
+# Real TTS tests (needs the provisioned Piper voices; skipped if absent)
+cd backend && uv run pytest -m tts_real
+
 # Everything
 cd backend && uv run pytest
 
@@ -35,6 +38,10 @@ cd backend && HF_HOME=../models/huggingface uv run python scripts/bench_stt.py
 
 # Phase 2 VAD pipeline benchmark (gate cost, silence rejection, trim, accuracy)
 cd backend && HF_HOME=../models/huggingface uv run python scripts/bench_vad.py
+
+# Phase 4 TTS E2E: real speech → real MT → real Piper synthesis → audio
+# frames over the real protocol (pass-through must bypass TTS)
+cd backend && uv run python scripts/e2e_tts_check.py
 
 # Phase 2 browser smoke (headless Chromium with Chrome's fake microphone;
 # screenshots land in docs/screenshots/phase2/)
@@ -341,3 +348,30 @@ keeping every decode pinned (Phase 1/2 text quality and speed).
 Honest MT quality note: the bundled OPUS-MT small models are everyday-sentence
 grade (KI-012) — the pipeline, decisions, limits and protocol are production
 paths; the provider is one setting away from a stronger engine.
+
+## 11. Phase 4 — TTS + browser audio playback — actual results (2026-11-04, ADR-0013)
+
+**Engine chosen (ADR-0013): Piper** — offline VITS voices on onnxruntime
+(already shipped for faster-whisper; no torch, no keys, no GPU). Provisioned
+voices: `ur_PK-fasih-medium`, `en_US-lessac-medium`, `es_MX-ald-medium`
+(22 050 Hz, under `models/tts/<lang>/`, ~190 MB total, git-ignored).
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Real synthesis probe (environment) | **PASS** | ur: 1.79 s audio in 0.10 s (RTF ≈ 0.06) · en: 2.09 s in 0.175 s · es: 2.98 s in 0.18 s; RMS ≈ 0.19 (audible), sr 22 050 |
+| `e2e_tts_check.py` (live :3000, v0.4.0) | **3/3 PASS** | Rule 1 ur→en: translation 109 ms + spoken en 2 577 ms audio, synthesis 1 573 ms (includes the first-use voice load), PCM RMS 0.191, binary frame = `bytes` · Rule 2 en→ur: 157 ms + spoken ur 3 424 ms audio in 546 ms, RMS 0.188 · Rule 3 es pass-through: ZERO audio frames (TTS bypassed) |
+| Backend suite | **155 passed + 1 xfailed** | +25 Phase 4 tests: TTS service bounds (timeout/rate/concurrency/unsupported/too-long), provider discovery, WS flow (audio+binary pairing, pass-through bypass, failure/unsupported/rate-limit error mapping, disabled shape), health exposure |
+| `tts_real` marked test | **PASS** | real ur/en/es synthesis through `PiperTTSProvider` (skips when voices absent) |
+| Frontend suite | **81/81 vitest**, typecheck clean, ESLint 0 | +24 Phase 4 tests: SpeechPlayer (sequential scheduling — overlap impossible, bounded queue w/ oldest-drop, re-basing after cancel, mute, autoplay resume), wsClient audio⇄binary pairing + stray-frame counter, `audio` event parsing (incl. rejects), voice-error chips |
+| Browser smoke (after the playback UI) | **10/10** | zero console/page errors |
+| Live regression: translation E2E + silence guard | **3/3 PASS · PASS** | Phase 3 paths unregressed |
+
+Bounded-resource guarantees (mirrors translation): 30 syntheses/min sliding
+window, ≤1 concurrent on a dedicated single-thread executor, 10 s hard
+timeout, 800-char text cap; every failure is a non-fatal utterance-scoped
+error and the translated text is never touched.
+
+Honest TTS quality note: Piper `medium` voices are comprehension-grade, not
+human-equivalent; the Urdu voice is a UAT-dataset model with eSpeak `ur`
+phonemization. Mixed-language Urdu sentences may render anglicisms with an
+Urdu accent. Provider abstraction = upgrade is a settings change.

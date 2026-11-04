@@ -123,6 +123,38 @@ under `models/translation/`); `libre` sends transcript TEXT (never audio) to
 the configured LibreTranslate instance; `fake` (deterministic stub) and
 `none` (no decisions) complete the settings matrix.
 
+### 3b. Synthesized speech: `audio` event + binary frame (Phase 4, ADR-0013)
+
+When the server has TTS enabled (`TTS_PROVIDER=piper|fake`), every successful
+`translation` is followed by its spoken version — the translated text is
+synthesized OFFLINE (Piper neural voices, no GPU, no keys) and delivered as
+TWO frames in order:
+
+```json
+{"v":1,"type":"audio","id":"c_0001_ab12cd","language":"en",
+ "encoding":"pcm_s16le","sample_rate":22050,"channels":1,
+ "bytes":113664,"duration_ms":2577,"synthesis_ms":546,"provider":"piper"}
+```
+
+followed by exactly ONE BINARY WebSocket frame of `bytes` octets: raw PCM16
+little-endian mono at `sample_rate` (server voices run at 22 050 Hz).
+WebSocket ordering guarantees the pairing; the client pairs the next binary
+frame it sees with the most recent `audio` metadata (and ignores binary
+frames without pending metadata).
+
+Rules:
+
+- `id` equals the `transcription`/`translation` id for the same utterance.
+- Only `translate` decisions produce audio — **original pass-through is
+  NEVER regenerated with TTS** (master prompt §17).
+- Synthesis is bounded like translation: sliding-window 30/min, ≤1
+  concurrent, `TTS_TIMEOUT_S` (10 s) timeout, dedicated worker thread.
+- A missing voice for the target language, a provider failure, a timeout or
+  a rate-limit hit answers a non-fatal utterance-scoped `error` instead —
+  the translated TEXT is always kept; only the audio is lost.
+- With `TTS_PROVIDER=none` no `audio` events and no server→client binary
+  frames exist at all (the protocol keeps the exact Phase 3 shape).
+
 **Backpressure (ADR-0009):** at most `STT_MAX_PENDING_PER_SESSION` (4)
 utterances per session and `STT_MAX_QUEUE_DEPTH` (16) globally are admitted
 for decoding at once. A flush beyond either cap is answered `server_busy`
@@ -163,6 +195,11 @@ server-initiated auto-flushes.
 | `translation_failed` | no | **Phase 3:** translation provider error — original transcript kept (utterance-scoped) |
 | `translation_timeout` | no | **Phase 3:** translation exceeded `TRANSLATION_TIMEOUT_S` — original kept |
 | `translation_rate_limited` | no | **Phase 3:** sliding-window rate limit reached — original kept |
+| `tts_failed` | no | **Phase 4 (ADR-0013):** voice synthesis failed — translated text kept (utterance-scoped) |
+| `tts_timeout` | no | **Phase 4:** synthesis exceeded `TTS_TIMEOUT_S` — translated text kept |
+| `tts_rate_limited` | no | **Phase 4:** sliding-window rate limit reached — translated text kept |
+| `tts_unsupported_language` | no | **Phase 4:** no voice provisioned for the target language — translated text kept |
+| `tts_text_too_long` | no | **Phase 4:** text above `TTS_MAX_TEXT_CHARS` is not spoken — translated text kept |
 
 Fatal errors are followed by a WebSocket close (1008 policy violation, 1013
 capacity, 1001 idle).
@@ -181,6 +218,12 @@ capacity, 1001 idle).
   line; on `translation_failed` / `translation_timeout` /
   `translation_rate_limited` keep the original text and surface a per-line
   warning (never re-flush, never re-request — ADR-0012).
+- Treat `audio` events (Phase 4) as the spoken version of the translation
+  with the same id: pair the next binary frame with the most recent `audio`
+  metadata, play clips SEQUENTIALLY (never overlapping), keep the queue
+  bounded, and cancel queued audio for a deleted line, a lost connection or
+  a user stop. On `tts_*` errors keep the translated text and surface a
+  per-line warning (never re-request — ADR-0013).
 - On `server_busy`, do NOT re-flush: that segment was dropped by design —
   keep speaking; the next segment is admitted normally (the reference client
   surfaces it as a non-fatal notice; audio chunks keep flowing).
