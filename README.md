@@ -81,7 +81,7 @@ logged above DEBUG, audio never persisted).
 ## Project layout
 
 ```
-prompt.md            product master prompt (requirements, roadmap, rules)
+prompt.md            Phase 3 scope & delivery record (translation decision engine)
 AGENT.md             permanent instructions for AI coding agents
 backend/             FastAPI + faster-whisper (uv-managed; tests in backend/tests)
 frontend/            React + Vite + TS strict (tests co-located in src)
@@ -93,7 +93,7 @@ start.sh             single-port production start (platform dev.sh calls this)
 ## Testing
 
 ```bash
-cd backend && uv run pytest                # 128 passed + 1 documented xfail
+cd backend && uv run pytest                # 130 passed + 1 documented xfail
 cd backend && HF_HOME=../models/huggingface uv run pytest -m stt_real   # real-model STT tests
 cd backend && uv run pytest -m translation_real                         # real offline MT tests
 cd frontend && npm run typecheck && npm run lint && npm run test
@@ -135,7 +135,7 @@ yet): [docs/testing.md](docs/testing.md).
 | --- | --- | --- |
 | 1 | Foundation + browser STT MVP | **complete** |
 | 2 | VAD + audio optimization | **complete — pending approval** |
-| 3 | Translation decision engine (bidirectional) | not started (needs approval) |
+| 3 | Translation decision engine (bidirectional) | **implemented — in testing / pending approval (v0.3.1)** |
 | 4 | TTS + browser playback | not started |
 | 5 | Complete browser MVP (two participants) | not started |
 | 6 | Mobile/browser compatibility on real devices | not started |
