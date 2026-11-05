@@ -46,7 +46,12 @@ export interface WsClientOptions {
   maxBackoffMs?: number
 }
 
-const DEFAULT_PING_MS = 20_000
+/** QA round (BUG-002): 4 s heartbeat. The server tracks the last frame it
+ * RECEIVED per connection and reclaims a rejoin-blocking ghost seat after
+ * 12 s of silence — a 20 s heartbeat would let a live-but-quiet member
+ * look stale. 4 s keeps every live member comfortably under the threshold
+ * (and still detects a dead uplink within ~14 s via the pong timeout). */
+const DEFAULT_PING_MS = 4_000
 const DEFAULT_PONG_TIMEOUT_MS = 10_000
 const DEFAULT_MAX_BACKOFF_MS = 10_000
 const BASE_BACKOFF_MS = 600
@@ -252,8 +257,12 @@ export class TranslatorWsClient {
       if (this.ws === null || this.ws.readyState !== WebSocket.OPEN) return
       const ts = Date.now()
       this.sendJson(pingMessage(ts))
+      // QA round (BUG-002): the pong deadline is armed ONCE per unanswered
+      // ping — a new ping must NOT extend the deadline of a ping that was
+      // never answered, otherwise a 4 s heartbeat with a 10 s timeout could
+      // never detect a dead connection (each new ping reset the clock).
+      if (this.pongTimer !== null) return
       const timeout = this.options.pongTimeoutMs ?? DEFAULT_PONG_TIMEOUT_MS
-      this.clearPongTimer()
       this.pongTimer = setTimeout(() => {
         // No pong in time → treat the connection as dead; onclose will
         // trigger the reconnect path.

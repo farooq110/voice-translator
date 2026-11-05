@@ -12,6 +12,11 @@ language (scenario 7), provider failure shared as utterance errors
 The acoustic feedback-loop scenario (12) is a client-side property — the
 server never re-ingests delivered audio (architectural), and the browser
 playback guard is unit-tested in the frontend suite.
+
+QA round (2026-11-05): stale-seat eviction tests (BUG-002) — a seat whose
+owner went silent (the proxy swallowed the disconnect) is reclaimed when the
+SAME participant re-hellos with the room code, and the evicted ghost's
+cleanup can never eject the returning participant.
 """
 
 from __future__ import annotations
@@ -20,7 +25,9 @@ import time
 from collections import deque
 from contextlib import contextmanager
 
+import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 
 from app.config import Settings
 from app.main import create_app
@@ -479,3 +486,152 @@ def test_room_lingers_then_is_destroyed() -> None:
             assert _receive_until(ws, "error")["code"] == "room_not_found"
         health = client.get("/health").json()
         assert health["rooms"]["active"] == 0
+
+
+# ------------------------------------------- stale-seat eviction (QA BUG-002)
+
+
+def test_ghost_host_seat_is_evicted_on_rejoin() -> None:
+    """QA round BUG-002: a host seat whose connection has gone SILENT (the
+    proxy swallowed its disconnect — the socket stays open server-side) is
+    reclaimed when the SAME participant re-hellos with the room code,
+    instead of answering a fatal room_full for the idle-timeout duration."""
+    stt = ScriptedSTT()
+    # stale threshold 0 → any silence qualifies (no waiting in tests).
+    with _app(stt, room_stale_seat_seconds=0.0) as client, _open(client) as ghost:
+        ghost.send_json(HOST_HELLO)
+        code = _receive_until(ghost, "ready")["room"]["code"]
+        with _open(client) as guest:
+            guest.send_json(guest_hello(code))
+            assert _receive_until(guest, "ready")["type"] == "ready"
+            assert _receive_until(ghost, "peer")["event"] == "joined"
+
+            # Host tab crashes with no close frame reaching the server; the
+            # participant reopens the invite link (new socket, same code).
+            with _open(client) as returning:
+                returning.send_json(
+                    {**HOST_HELLO, "config": {**HOST_HELLO["config"], "room": code}}
+                )
+                ready = _receive_until(returning, "ready")
+                assert ready["room"]["code"] == code
+
+                # The ghost is told why it lost the room, then closed.
+                err = _receive_until(ghost, "error")
+                assert err["code"] == "seat_taken"
+                assert err["fatal"] is True
+                with pytest.raises(WebSocketDisconnect):
+                    while True:
+                        ghost.receive_json()
+
+                # The guest saw the ghost leave and the host return.
+                left = _receive_until(guest, "peer")
+                assert left["event"] == "left" and left["role"] == "host"
+                joined = _receive_until(guest, "peer")
+                assert joined["event"] == "joined" and joined["role"] == "host"
+
+                # Membership: exactly the returning host + the guest.
+                room = client.app.state.rooms.get(code)
+                assert set(room.members.keys()) == {"host", "guest"}
+
+                # Routing resumes for the returning host.
+                stt.script([("ur", 0.97)])
+                _say(returning, utterance_id="h_qa2ghost")
+                tr = _receive_until(guest, "transcription")
+                assert tr["speaker"] == "host"
+
+
+def test_fresh_host_seat_is_not_evicted() -> None:
+    """A room_full for a LIVE seat owner (recent frames) stays fatal — a
+    second tab / third device cannot steal the seat; eviction only applies
+    to silent ghosts."""
+    stt = ScriptedSTT()
+    with _app(stt, room_stale_seat_seconds=10_000.0) as client, _open(client) as live:
+        live.send_json(HOST_HELLO)
+        code = _receive_until(live, "ready")["room"]["code"]
+        with _open(client) as second:
+            second.send_json(
+                {**HOST_HELLO, "config": {**HOST_HELLO["config"], "room": code}}
+            )
+            err = _receive_until(second, "error")
+            assert err["code"] == "room_full"
+            assert err["fatal"] is True
+            with pytest.raises(WebSocketDisconnect):
+                second.receive_json()
+        # The live owner is untouched.
+        room = client.app.state.rooms.get(code)
+        assert set(room.members.keys()) == {"host"}
+
+
+def test_ghost_guest_seat_is_evicted_on_rejoin() -> None:
+    """Same reclaim for the guest seat — the invited participant can reopen
+    the invite link after a crash without waiting out the idle timeout."""
+    stt = ScriptedSTT()
+    with _app(stt, room_stale_seat_seconds=0.0) as client, _open(client) as host:
+        host.send_json(HOST_HELLO)
+        code = _receive_until(host, "ready")["room"]["code"]
+        with _open(client) as ghost:
+            ghost.send_json(guest_hello(code))
+            assert _receive_until(ghost, "ready")["type"] == "ready"
+            assert _receive_until(host, "peer")["event"] == "joined"
+
+            with _open(client) as returning:
+                returning.send_json(guest_hello(code))
+                ready = _receive_until(returning, "ready")
+                assert ready["room"]["code"] == code
+                assert ready["room"]["role"] == "guest"
+
+                err = _receive_until(ghost, "error")
+                assert err["code"] == "seat_taken"
+                assert err["fatal"] is True
+
+                # Host saw exactly one leave + one join (no duplicates).
+                left = _receive_until(host, "peer")
+                assert left["event"] == "left" and left["role"] == "guest"
+                joined = _receive_until(host, "peer")
+                assert joined["event"] == "joined" and joined["role"] == "guest"
+
+                room = client.app.state.rooms.get(code)
+                assert set(room.members.keys()) == {"host", "guest"}
+
+
+def test_evicted_ghost_cleanup_does_not_eject_the_new_member() -> None:
+    """Regression guard: the reclaimed ghost's server-side handler keeps
+    looping until its idle timeout; when it finally ends, its cleanup must
+    NOT remove the returning participant nor fire a bogus peer 'left'."""
+    stt = ScriptedSTT()
+    with _app(stt, room_stale_seat_seconds=0.0) as client, _open(client) as ghost:
+        ghost.send_json(HOST_HELLO)
+        code = _receive_until(ghost, "ready")["room"]["code"]
+        with _open(client) as guest:
+            guest.send_json(guest_hello(code))
+            assert _receive_until(guest, "ready")["type"] == "ready"
+            with _open(client) as returning:
+                returning.send_json(
+                    {**HOST_HELLO, "config": {**HOST_HELLO["config"], "room": code}}
+                )
+                assert _receive_until(returning, "ready")["type"] == "ready"
+                assert _receive_until(ghost, "error")["code"] == "seat_taken"
+
+                # Drain the guest's expected room events: the eviction notice
+                # and the returning host's join.
+                assert _receive_until(guest, "peer")["event"] == "left"
+                assert _receive_until(guest, "peer")["event"] == "joined"
+
+                # The ghost's handler ends (the server closed its socket).
+                ghost.close()
+                time.sleep(0.05)
+
+                # Membership unchanged: the returning host keeps the seat.
+                room = client.app.state.rooms.get(code)
+                assert set(room.members.keys()) == {"host", "guest"}
+
+                # ...and the guest sees NO bogus host 'left' around host speech.
+                stt.script([("ur", 0.97)])
+                _say(returning, utterance_id="h_qa2guard")
+                events = [guest.receive_json() for _ in range(3)]
+                bogus_lefts = [
+                    e for e in events
+                    if e.get("type") == "peer" and e.get("event") == "left"
+                ]
+                assert bogus_lefts == []
+                assert any(e.get("type") == "transcription" for e in events)

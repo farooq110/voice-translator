@@ -84,8 +84,21 @@ const LS_HANDS_FREE = 'vt.hands_free'
 const LS_PLAYBACK = 'vt.playback'
 
 /** Fatal room errors stop the reconnect loop: re-helloing with a dead or
- * full room can never succeed — the user needs a fresh invite instead. */
-const ROOM_FATAL_CODES: readonly string[] = ['room_not_found', 'room_full', 'room_required']
+ * expired room can never succeed — the user needs a fresh invite instead.
+ * `seat_taken` (QA round BUG-002): this seat was reclaimed by a newer
+ * connection of the same participant (the invite link was reopened after
+ * this tab became a ghost) — re-helloing cannot win either.
+ * `room_full` is deliberately NOT in this list: during a RECONNECT it means
+ * the old seat's ghost has not been evicted yet, so the client retries
+ * while the server reclaims the seat (12 s stale-seat threshold); a FIRST
+ * join that answers room_full is a genuine third participant and fails
+ * immediately (see handleEvent). */
+const ROOM_FATAL_CODES: readonly string[] = ['room_not_found', 'room_required', 'seat_taken']
+/** QA round (BUG-002): how long a reconnecting client keeps retrying after
+ * room_full before giving up and asking for a fresh invite. The server
+ * evicts a stale seat after 12 s of silence; 90 s covers many backoff
+ * retry rounds plus a flaky-link margin. */
+const REJOIN_GRACE_MS = 90_000
 
 // --- Sentence endpointing (client-side energy gate, ADR-0007) ---------------
 //
@@ -293,6 +306,13 @@ export function useTranslatorSession(wsUrl: string): SessionState {
   /** Phase 5: the host's current room code — re-sent on reconnect so the
    * server re-attaches this client to ITS room (linger window). */
   const lastRoomCodeRef = useRef<string | null>(null)
+  /** QA round (BUG-002): true once this session has ever been `ready` —
+   * distinguishes a RECONNECT's room_full (retry) from a first join's
+   * room_full (a genuine third participant — fatal immediately). */
+  const wasReadyRef = useRef(false)
+  /** QA round (BUG-002): epoch-ms deadline of the room_full rejoin retry
+   * window (null while not retrying). */
+  const rejoinDeadlineRef = useRef<number | null>(null)
   const playbackEnabledRef = useRef(playbackEnabled)
   playbackEnabledRef.current = playbackEnabled
 
@@ -411,6 +431,35 @@ export function useTranslatorSession(wsUrl: string): SessionState {
       return
     }
     if (event.type === 'error') {
+      // QA round (BUG-002): room_full during a RECONNECT means this seat's
+      // ghost has not been evicted yet — keep the wsClient reconnect
+      // backoff running (each retry re-hellos; the server reclaims a seat
+      // that has been silent >12 s) and give up after REJOIN_GRACE_MS.
+      if (event.code === 'room_full') {
+        if (!wasReadyRef.current) {
+          // First join: the room genuinely has two participants.
+          clientRef.current?.close()
+          setError({ code: event.code, message: event.message })
+          return
+        }
+        if (rejoinDeadlineRef.current === null) {
+          rejoinDeadlineRef.current = Date.now() + REJOIN_GRACE_MS
+        }
+        if (Date.now() > rejoinDeadlineRef.current) {
+          rejoinDeadlineRef.current = null
+          clientRef.current?.close()
+          setError({
+            code: 'room_full',
+            message: 'Could not rejoin the room — please open a fresh invite link.',
+          })
+          return
+        }
+        setError({
+          code: 'room_full',
+          message: 'Your seat is still being freed — reconnecting…',
+        })
+        return
+      }
       // Phase 5: an unusable room can never succeed by retrying — stop the
       // reconnect loop and surface the reason (the user needs a new invite).
       if (ROOM_FATAL_CODES.includes(event.code)) {
@@ -461,7 +510,19 @@ export function useTranslatorSession(wsUrl: string): SessionState {
       url: wsUrl,
       config: () => configRef.current,
       handlers: {
-        onStatus: (status) => setWsStatus(status),
+        onStatus: (status) => {
+          setWsStatus(status)
+          // QA round (BUG-002): a successful (re)join clears the retry
+          // bookkeeping — and marks that this session was ready at least
+          // once (first-join room_full stays fatal).
+          if (status === 'connected') {
+            wasReadyRef.current = true
+            if (rejoinDeadlineRef.current !== null) {
+              rejoinDeadlineRef.current = null
+              setError(null)
+            }
+          }
+        },
         onEvent: handleEvent,
         onProtocolError: (protocolError) =>
           setError({ code: 'protocol_error', message: protocolError.message }),

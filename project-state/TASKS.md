@@ -132,6 +132,20 @@ explicit approval per master prompt §23.
 | P5-06 | Verification: backend **171 passed + 1 xfailed**; frontend **101/101** + tsc + ESLint + build; live `e2e_phase5_check.py` **4/4** (two real connections, real STT/MT/Piper: routed voice only to the listener, relay without TTS, same-language both ways); translation E2E 3/3 + silence guard PASS; `smoke_phase5.mjs` **12/12** (invite-link join, guest sees no settings, both record, zero console errors); `smoke_phase2.mjs` 10/10 | DONE |
 | P5-07 | Docs: ADR-0014; README (status/diagram/limitations/roadmap); protocol spec (rooms/peer/relay/speaker + error table); architecture.md; testing.md §12; deployment.md (ROOM_LINGER_SECONDS); prompt.md (Phase 5 record); DECISIONS D-016; KNOWN_ISSUES KI-016/017/018; CHANGELOG 0.5.0; CURRENT_STATE; APP_VERSION 0.5.0; branch-local PHASE-5.md (phase-5 branch only) | DONE |
 
+## Phase 5 QA round — Deployment hardening — COMPLETE (pending approval)
+
+Input: independent QA verification report (Journal, 2026-11-05) — verdict
+"NOT ACCEPTED yet", blockers BUG-001/BUG-002, advisory BUG-003.
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P5-QA-1 | BUG-001: TTS provisioning integrity — `download_tts_voices.py` retry/backoff for HF 429 + `--verify` (all voices complete or exit 1); `start.sh` verify-gates the boot; startup `TTS PROVISIONING WARNING` log + additive `/health.tts.warning`; voices re-provisioned live (ur/en/es onnx+json) | DONE |
+| P5-QA-2 | BUG-002: stale-seat eviction — `last_seen` per connection refreshed on every received frame; rejoin evicts its own seat's ghost after `ROOM_STALE_SEAT_SECONDS` (12 s) with fatal `seat_taken` + server-side close + honest `peer left`; `leave_room()` identity guard (an evicted ghost can never eject the returning member); live occupants keep fatal `room_full` | DONE |
+| P5-QA-3 | BUG-002 client side: 4 s heartbeat (pong deadline armed once per unanswered ping), `room_full` retried during RECONNECT ≤90 s with honest banner (first-join room_full stays fatal), `seat_taken` added to fatal codes | DONE |
+| P5-QA-4 | BUG-003: app-layer verified on both ends (server closes on every fatal path — confirmed locally; client closes on room-fatal errors; half-open sockets reaped ≤14 s by the pong timeout); proxy close-frame gap documented (KI-021) for the production deployment | DONE |
+| P5-QA-5 | Verification: backend suite green (+6 tests: eviction host/guest, live-seat guard, cleanup regression, health warnings ×2); frontend 101/101 + tsc + build; live probe 5/5 (TTS delivery to the opposite participant only 110,592 B PCM, zero self-audio, solo fallback, ghost reclaim after 13 s, live-seat room_full, fatal close); `/health` v0.5.1 shows `tts.languages=[en,es,ur]` | DONE |
+| P5-QA-6 | Docs: ADR-0015; protocol spec (eviction + `seat_taken` + heartbeat + retry semantics); DECISIONS D-017; KNOWN_ISSUES KI-019/020/021; CHANGELOG 0.5.1; CURRENT_STATE; APP_VERSION 0.5.1; PHASE-5.md QA-round section (phase-5 branch) | DONE |
+
 ## Phase 6+ — see `prompt.md` section 17
 
 Mobile compatibility on real devices (P6), Zoom (P7), extension (P8),

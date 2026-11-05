@@ -2,6 +2,40 @@
 
 All meaningful project changes. Format based on Keep a Changelog.
 
+## [0.5.1] — QA round: deployment hardening (2026-11-05)
+
+Input: independent QA verification report (Journal, 2026-11-05) — verdict
+"NOT ACCEPTED yet" with BUG-001/002/003. Fixes per ADR-0015.
+
+### Fixed
+- **BUG-001 (blocker, deployment): no usable TTS voices.** HuggingFace 429s
+  on the small `.onnx.json` voice configs left `.onnx`-only directories
+  that start.sh silently accepted. `download_tts_voices.py` now retries
+  transient failures (5 attempts, 5–60 s backoff) and has a `--verify`
+  mode; `start.sh` verify-gates provisioning before boot; the app logs a
+  `TTS PROVISIONING WARNING` when TTS is enabled but voiceless, and
+  `/health.tts.warning` exposes the same gap.
+- **BUG-002 (high): ghost seat blocked rejoin ~180 s.** Stale-seat
+  eviction: a rejoin that finds its own seat held by a member silent for
+  `ROOM_STALE_SEAT_SECONDS` (12 s) evicts the ghost (fatal `seat_taken`,
+  server-side close, honest `peer left`) and takes the seat back; live
+  occupants are never evicted (fatal `room_full` unchanged). Client: 4 s
+  heartbeat (pong deadline armed once per unanswered ping), `room_full`
+  retried during reconnects (≤90 s) instead of dying, `seat_taken` fatal.
+- **BUG-003 (low): fatal errors did not close the WebSocket through the
+  preview proxy.** App layer verified correct on both ends (server closes
+  on every fatal path — verified locally; client closes on room-fatal
+  errors, pong timeout reaps half-open sockets ≤14 s); the proxy gap is
+  documented (KI-021) for the production deployment.
+
+### Tests
+- Backend: +6 tests (ghost eviction host/guest, live-seat protection,
+  ghost-cleanup regression guard, /health TTS warning ×2) — full suite
+  green. Frontend: 101/101, tsc clean, production build OK.
+- Live probe (real Whisper/MT/Piper): TTS delivery to the opposite
+  participant only, solo fallback, ghost-seat reclaim after 13 s silence,
+  live-seat room_full, fatal-close — 5/5 PASS.
+
 ## [0.5.0] — Phase 5: complete browser MVP — two participants (2026-11-04)
 
 Input: user approval "start phase 5 and complete it" (2026-11-04).

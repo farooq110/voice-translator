@@ -208,7 +208,7 @@ describe('TranslatorWsClient', () => {
     await vi.advanceTimersByTimeAsync(0)
     ws.serverFrame(READY_EVENT)
 
-    await vi.advanceTimersByTimeAsync(20_000)
+    await vi.advanceTimersByTimeAsync(4_000)
     const types = ws.sentJson().map((msg) => (msg as { type?: string }).type)
     expect(types).toContain('ping')
   })
@@ -221,7 +221,7 @@ describe('TranslatorWsClient', () => {
     await vi.advanceTimersByTimeAsync(0)
     first.serverFrame(READY_EVENT)
 
-    await vi.advanceTimersByTimeAsync(20_000) // ping sent, pong timer armed
+    await vi.advanceTimersByTimeAsync(4_000) // ping sent, pong timer armed
     await vi.advanceTimersByTimeAsync(10_000) // pong timeout → close
     expect(statuses).toContain('reconnecting')
 
