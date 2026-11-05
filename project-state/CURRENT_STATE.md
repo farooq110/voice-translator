@@ -1,6 +1,6 @@
 # CURRENT_STATE
 
-_Last updated: 2026-11-04 — Phase 5 implemented + verified (v0.5.0), pending approval_
+_Last updated: 2026-11-05 — Phase 5 QA round: BUG-001/002/003 fixed + live-verified (v0.5.1), pending approval_
 
 ## Phase
 
@@ -9,6 +9,16 @@ verified (2026-11-04, ADR-0014). Phases 1–4 remain complete (Phases 3 and 4
 are pending their own approval records). Work sits on `main` and is pushed
 to `main` and the `phase-5` branch per the user's delivery instruction
 (`PHASE-3.md`/`PHASE-4.md`/`PHASE-5.md` live ONLY on their own branches).
+
+**QA round (2026-11-05, ADR-0015):** the independent QA verification
+(Journal) blocked acceptance with BUG-001 (deployment had no usable Piper
+voices — HF 429 during boot provisioning), BUG-002 (a ghost seat blocked
+rejoin ~180 s after an unclean drop through the preview proxy) and BUG-003
+(fatal errors' close frames swallowed by the same proxy). All three are
+fixed and re-verified live: voices provisioned + verify-gated boot +
+`/health.tts.warning`; stale-seat eviction (12 s silence threshold, live
+occupants protected); client 4 s heartbeat + `room_full` reconnect retry.
+Deployment runs v0.5.1 with the full ur/en/es voice set.
 
 ## Current task
 

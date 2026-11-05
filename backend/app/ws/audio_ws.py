@@ -137,6 +137,12 @@ class _Connection:
         self.room: Room | None = None
         self.hello_done = False
         self.closed = False
+        # QA round (BUG-002): monotonic timestamp of the last frame RECEIVED
+        # from this client (any text/binary/disconnect). The endpoint loop
+        # refreshes it on every message. A seat whose owner has sent nothing
+        # for `room_stale_seat_seconds` is a GHOST (the platform proxy can
+        # swallow a dead client's disconnect) and may be reclaimed on rejoin.
+        self.last_seen: float = time.monotonic()
         self._send_lock = asyncio.Lock()
         self._pending: set[asyncio.Task[None]] = set()
         # Phase 3: in-flight translations are tracked so close can cancel
@@ -256,6 +262,15 @@ class _Connection:
         if room is None:
             return
         role = self.role
+        # QA round (BUG-002): if this seat was reclaimed (stale-seat eviction)
+        # and is now owned by a NEWER connection, this ghost's cleanup must
+        # not eject the returning participant or fire a bogus "left" event.
+        if room.members.get(role) is not self:
+            logger.info(
+                "ws.leave_skipped_seat_taken session_id=%s role=%s",
+                self.session.id, role,
+            )
+            return
         room.leave(role)
         for member in room.everyone():
             await member.room_send(
@@ -283,6 +298,59 @@ class _Connection:
         await self._send(
             ErrorEvent(code=code, message=message, fatal=fatal, utterance_id=utterance_id)
         )
+
+    async def _reclaim_stale_seat(self, room: Room, role: str) -> bool:
+        """QA round (BUG-002): free `role`'s seat when its owner is a GHOST.
+
+        The preview proxy can swallow a dead client's disconnect, so the
+        server may keep the seat occupied for the full idle timeout (180 s)
+        while the participant is long gone. A returning participant that
+        re-hellos with the same code and role proves the seat owner is back;
+        the OLD connection is evicted when it has sent nothing for
+        `room_stale_seat_seconds` (a live client pings every 4 s and streams
+        audio while recording, so it can never look stale).
+
+        Returns True when a stale seat was evicted (caller retries the join).
+        """
+        stale_after = max(0.0, self.settings.room_stale_seat_seconds)
+        ghost = room.members.get(role)
+        if ghost is None:
+            return False
+        ghost_seen = getattr(ghost, "last_seen", None)
+        if ghost_seen is None or (time.monotonic() - ghost_seen) <= stale_after:
+            # Seat owner is alive (recent frames) — genuinely occupied.
+            return False
+        logger.warning(
+            "ws.room_evict_ghost code=%s role=%s silent_s=%.1f threshold_s=%.1f",
+            room.code, role, time.monotonic() - ghost_seen, stale_after,
+        )
+        room.leave(role)
+        ghost.room = None  # its eventual cleanup must not touch this room
+        # Tell the ghost why it lost the room, then close it server-side
+        # (swallow errors — its socket may already be unusable).
+        await ghost.room_send(
+            ErrorEvent(
+                code="seat_taken",
+                message="Your seat was taken over by a new connection.",
+                fatal=True,
+            ).model_dump_json(exclude_none=True)
+        )
+        try:
+            await ghost.websocket.close(code=CLOSE_POLICY_VIOLATION)
+        except Exception:  # noqa: BLE001 — dead socket
+            pass
+        # Notify whoever remains (e.g. the peer) that the ghost is gone.
+        for member in room.everyone():
+            await member.room_send(
+                PeerEvent(
+                    event="left",
+                    role=role,  # type: ignore[arg-type]
+                    peers=room.peer_count(excluding=member.role),
+                ).model_dump_json(exclude_none=True)
+            )
+        if not room.members and self.rooms is not None:
+            room.schedule_destroy(self.rooms)
+        return True
 
     # ------------------------------------------------------------------ in
 
@@ -391,12 +459,16 @@ class _Connection:
             try:
                 room.join("host", self)
             except RoomFullError:
-                await self.send_error(
-                    "room_full",
-                    "This room already has an active host connection.",
-                    fatal=True,
-                )
-                return False
+                # QA round (BUG-002): the seat may be held by a ghost (the
+                # proxy swallowed its disconnect). Reclaim it when silent.
+                if not await self._reclaim_stale_seat(room, "host"):
+                    await self.send_error(
+                        "room_full",
+                        "This room already has an active host connection.",
+                        fatal=True,
+                    )
+                    return False
+                room.join("host", self)
             room.config = config
             logger.info("ws.room_rejoin session_id=%s code=%s", self.session.id, room.code)
         else:
@@ -457,12 +529,15 @@ class _Connection:
         try:
             room.join("guest", self)
         except RoomFullError:
-            await self.send_error(
-                "room_full",
-                "This room already has two participants.",
-                fatal=True,
-            )
-            return False
+            # QA round (BUG-002): reclaim the seat when its owner is a ghost.
+            if not await self._reclaim_stale_seat(room, "guest"):
+                await self.send_error(
+                    "room_full",
+                    "This room already has two participants.",
+                    fatal=True,
+                )
+                return False
+            room.join("guest", self)
         room_config = room.config
         self.room = room
         self.session.config = config  # audio format only; languages come from the room
@@ -1045,6 +1120,9 @@ async def audio_socket(websocket: WebSocket) -> None:
                 )
                 await websocket.close(code=CLOSE_GOING_AWAY)
                 break
+            # QA round (BUG-002): every received frame proves the client is
+            # alive — the stale-seat eviction heuristic depends on it.
+            conn.last_seen = time.monotonic()
             if message["type"] == "websocket.disconnect":
                 break
             text = message.get("text")

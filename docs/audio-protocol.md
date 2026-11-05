@@ -51,7 +51,8 @@ non-fatal `hello_already_sent`; host languages missing → fatal
 `missing_languages`; identical host languages → non-fatal
 `identical_languages` warning (pass-through semantics apply from Phase 3);
 guest without a code → fatal `room_required`; unknown/expired code → fatal
-`room_not_found`; both slots taken → fatal `room_full`.
+`room_not_found`; both slots taken → fatal `room_full` — UNLESS the seat's
+owner is a ghost (stale-seat eviction, below).
 
 ### 2a. Rooms and presence (Phase 5, ADR-0014)
 
@@ -70,6 +71,16 @@ When the last member leaves, the room lingers `ROOM_LINGER_SECONDS`
 its slot back (the host stays the config authority); after the linger the
 room is destroyed and the code dies. Rooms are in-memory and single-process
 (a restart ends every room — Phase 10 scope).
+
+**Stale-seat eviction (QA round, BUG-002, ADR-0015).** A proxy can swallow
+a dead client's disconnect, keeping a seat occupied by a GHOST. The server
+tracks the last RECEIVED frame per connection; when a hello finds its own
+seat occupied by a member that has sent nothing for
+`ROOM_STALE_SEAT_SECONDS` (12 s default), the seat is reclaimed: the ghost
+receives a fatal `seat_taken` error and is closed server-side, the peer
+gets the normal `peer left` event, and the returning participant takes the
+seat. A LIVE occupant (frames within the threshold) is never evicted — a
+genuinely occupied room still answers fatal `room_full`.
 
 ## 3. Steady state
 
@@ -267,7 +278,8 @@ server-initiated auto-flushes.
 | `tts_text_too_long` | no | **Phase 4:** text above `TTS_MAX_TEXT_CHARS` is not spoken — translated text kept |
 | `room_required` | yes | **Phase 5 (ADR-0014):** a guest hello without an invite code |
 | `room_not_found` | yes | **Phase 5:** unknown or expired room code (the room's linger expired) |
-| `room_full` | yes | **Phase 5:** both room slots are taken (a third connection, or a host rejoin collision) |
+| `room_full` | yes | **Phase 5:** both room slots are taken by LIVE members (a third connection, or a host rejoin collision). A reconnecting client that owns a STALE seat is instead evicted-and-rejoined (ADR-0015); the reference client retries room_full during a RECONNECT (≤90 s) before treating it as fatal |
+| `seat_taken` | yes | **QA round (ADR-0015):** this connection's seat was reclaimed by a newer connection of the same participant (this tab became a ghost) — stop reconnecting; the session continues on the newer connection |
 | `missing_languages` | yes | **Phase 5:** a host hello without both language fields |
 
 Fatal errors are followed by a WebSocket close (1008 policy violation, 1013
@@ -277,7 +289,9 @@ capacity, 1001 idle).
 
 - Send `hello` exactly once, before any binary frame.
 - Keep chunks ≤ 256 KiB (the reference client sends 100 ms chunks).
-- Heartbeat with `ping` every 20 s; reconnect on missing `pong` (10 s) — the
+- Heartbeat with `ping` every **4 s** (QA round, ADR-0015 — keeps the
+  server's stale-seat detector from ever seeing a live member as silent);
+  reconnect on missing `pong` (10 s, armed once per unanswered ping) — the
   reference client reconnects with capped exponential backoff (600 ms → 10 s).
 - Send `flush` with a unique client-generated `utterance_id` (ADR-0011) and
   settle in-flight state strictly by the echoed id — never attribute an
@@ -296,8 +310,11 @@ capacity, 1001 idle).
 - Rooms (Phase 5): key transcript entries and playback clips by
   `(speaker, id)` — ids collide across participants; treat `peer` events
   as presence truth; on fatal `room_*` errors STOP reconnecting (a dead
-  or full room never recovers by retrying — get a fresh invite) and arm
+  or expired room never recovers by retrying — get a fresh invite) and arm
   the uplink mute while REMOTE audio plays (feedback-loop guard).
+  EXCEPTION (QA round, ADR-0015): `room_full` during a RECONNECT is
+  retried with backoff (≤90 s) while the server reclaims a stale seat;
+  a first-join `room_full` stays fatal. `seat_taken` is always fatal.
 - Treat `relay` events (Phase 5) like `audio`: pair the next binary frame
   with the most recent `relay` metadata and play it sequentially. The
   relay is the peer's ORIGINAL third-language audio — it is never
