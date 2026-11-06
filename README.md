@@ -6,7 +6,7 @@ Language — the other person installs and configures nothing. The system
 detects what language each side speaks, translates only the configured pair in
 the required direction, and passes every other language through untouched.
 
-> **Status — Phase 5 complete (of 10): the browser MVP.** Working today:
+> **Status — Phase 6 complete (of 10): mobile/browser compatibility.** Working today:
 > responsive browser UI (mobile-first), microphone capture, real-time
 > streaming to the backend, **local CPU speech recognition (Whisper, no
 > GPU)** with automatic language detection (detect-first, then a pinned
@@ -18,13 +18,18 @@ the required direction, and passes every other language through untouched.
 > other side, theirs for you, any third language passes through untouched
 > — **offline by default**, CTranslate2 OPUS-MT, no API keys), **offline
 > Piper spoken output** (Urdu, English, Spanish — no GPU, no keys) through
-> a sequential playback queue that can never overlap, and — new in
-> Phase 5 — **two-person sessions**: the translator shares an invite link,
-> the other person opens it and speaks (no install, no settings),
-> transcripts are shared with speaker labels, translated voices reach
-> only the listener, third languages are relayed as original audio, and a
-> playback guard prevents microphone feedback loops (ADR-0014). Meeting
-> integrations arrive in the next phases — see the [roadmap](#roadmap).
+> a sequential playback queue that can never overlap, **two-person
+> sessions** (share an invite link; transcripts with speaker labels;
+> translated voices reach only the listener; a playback guard prevents
+> feedback loops — ADR-0014) and — new in Phase 6 — **mobile-ready
+> behavior**: backgrounding the tab or an incoming call stops the capture
+> honestly instead of streaming silence (ADR-0016), a screen wake lock
+> keeps hands-free sessions alive, the app installs to a phone home
+> screen (PWA manifest + icons), and the server sees which device
+> families connect (`/health`). Verified under full device emulation in
+> headless Chromium; the human real-device matrix lives in
+> [docs/testing.md §13](docs/testing.md#13-phase-6--mobilebrowser-compatibility--actual-results-2026-11-06-adr-0016).
+> Meeting integrations arrive in the next phases — see the [roadmap](#roadmap).
 
 ![desktop](docs/screenshots/phase2/desktop.png)
 
@@ -165,12 +170,15 @@ list (what is *not* tested yet): [docs/testing.md](docs/testing.md).
   `room_full`).
 - The feedback-loop guard mutes the uplink while REMOTE audio plays
   (+300 ms tail) — speaking over the other side's voice playback can clip
-  the recording start; browser AEC covers most of the rest, and real-device
-  acoustics are measured in **Phase 6** (KI-004/KI-015).
-- No real-device testing yet (Android Chrome / iOS Safari / desktop Chrome —
-  **Phase 6**); a 5-minute desktop-Chrome manual checklist is in
-  [docs/testing.md §8](docs/testing.md). Background-tab/lock-screen behavior
-  is undocumented until then.
+  the recording start; browser AEC covers most of the rest, and acoustic
+  quality on physical hardware is part of the Phase 6 human matrix
+  ([testing.md §13b](docs/testing.md)) — not yet run.
+- Mobile behavior is verified under full device emulation in headless
+  Chromium (ADR-0016); real Android/iOS hardware runs are the human
+  checklist in [testing.md §13b](docs/testing.md) — until it is run, no
+  hardware claims are made. Backgrounding the tab or an incoming call
+  stops the recording honestly (by design), so the mic is never silently
+  dead while the UI claims it is live.
 - No authentication — intended for private/LAN/sandbox deployment (**Phase 10**).
 - Piper `medium` voices are comprehension-grade, not human-equivalent; the
   Urdu voice (UAT dataset, eSpeak phonemization) can render anglicisms with
@@ -185,11 +193,11 @@ list (what is *not* tested yet): [docs/testing.md](docs/testing.md).
 | Phase | Scope | Status |
 | --- | --- | --- |
 | 1 | Foundation + browser STT MVP | **complete** |
-| 2 | VAD + audio optimization | **complete — pending approval** |
-| 3 | Translation decision engine (bidirectional) | **implemented — in testing / pending approval (v0.3.1)** |
-| 4 | TTS + browser playback | **implemented — in testing / pending approval (v0.4.0)** |
-| 5 | Complete browser MVP (two participants) | **implemented — in testing / pending approval (v0.5.0)** |
-| 6 | Mobile/browser compatibility on real devices | not started |
+| 2 | VAD + audio optimization | **complete** |
+| 3 | Translation decision engine (bidirectional) | **complete** |
+| 4 | TTS + browser playback | **complete** |
+| 5 | Complete browser MVP (two participants) | **complete** |
+| 6 | Mobile/browser compatibility on real devices | **complete** (device emulation + human matrix ready, v0.6.0) |
 | 7 | Zoom integration (first meeting app) | not started |
 | 8 | Chrome extension / advanced audio | not started |
 | 9 | More meeting apps (one at a time) | not started |

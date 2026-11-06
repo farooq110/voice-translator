@@ -146,8 +146,23 @@ Input: independent QA verification report (Journal, 2026-11-05) — verdict
 | P5-QA-5 | Verification: backend suite green (+6 tests: eviction host/guest, live-seat guard, cleanup regression, health warnings ×2); frontend 101/101 + tsc + build; live probe 5/5 (TTS delivery to the opposite participant only 110,592 B PCM, zero self-audio, solo fallback, ghost reclaim after 13 s, live-seat room_full, fatal close); `/health` v0.5.1 shows `tts.languages=[en,es,ur]` | DONE |
 | P5-QA-6 | Docs: ADR-0015; protocol spec (eviction + `seat_taken` + heartbeat + retry semantics); DECISIONS D-017; KNOWN_ISSUES KI-019/020/021; CHANGELOG 0.5.1; CURRENT_STATE; APP_VERSION 0.5.1; PHASE-5.md QA-round section (phase-5 branch) | DONE |
 
-## Phase 6+ — see `prompt.md` section 17
+## Phase 6 — Mobile/browser compatibility — COMPLETE (pending approval)
 
-Mobile compatibility on real devices (P6), Zoom (P7), extension (P8),
-more apps (P9), production (P10). All `TODO` and **blocked until the
-respective phase is approved**.
+Approval: user message "start phase 6 and complete it" (2026-11-06) —
+explicit approval per master prompt §23 (it also closes the Phase 5
+approval record).
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P6-01 | Honest capture lifecycle (ADR-0016): `visibilitychange → hidden` finalizes the recording exactly like a connection loss (capture stopped, buffer flushed, playback + PlaybackGuard cleared) with a plain-language banner; `pagehide` finalizes quietly; `startMicCapture` gains a `statechange` watchdog (`onStateLost`) for iOS `interrupted`/suspension, disarmed on stop; return-to-tab re-arms playback via `SpeechPlayer.resumeIfCreated()` (never creates an AudioContext) | DONE |
+| P6-02 | Screen Wake Lock (`services/wakeLock.ts`, injectable + unit-tested): acquire on recording start, release on finalize, OS-dropped sentinels forgotten, denials (low-power mode) degrade silently | DONE |
+| P6-03 | Coarse platform telemetry: protocol v1 additive optional `hello.config.client.platform` (lowercase tag ≤ 24 chars, never a raw UA); `Session.platform` + `/health sessions.by_platform` aggregation; 7 params validation tests + 2 aggregation tests; older clients unaffected | DONE |
+| P6-04 | Mobile comfort: PWA manifest + generated 192/512 icons + apple metas; `overscroll-behavior-y: none` (no pull-to-refresh reload mid-recording); 16 px form controls (no iOS focus zoom); sticky capture panel on small screens; ≥ 44 px touch targets; stale phase copy in index.html/footer refreshed; frontend version 0.6.0 | DONE |
+| P6-05 | Verification: backend **177 passed + 1 xfailed** (+7); frontend **123/123** (+9: platform mapping, WakeLock incl. OS-drop/deny, resumeIfCreated) + tsc + ESLint + build; `smoke_phase6.mjs` under FULL iPhone emulation **8/8** (incl. platform tag end-to-end + background-tab guard); regressions smoke_phase2 **10/10**, smoke_phase5 **12/12**; live E2E translation **3/3**, two-participant **4/4**, silence guard **PASS** | DONE |
+| P6-06 | Human real-device matrix written into `docs/testing.md §13b` (Android Chrome ×7, iPhone Safari ×7 incl. call/Siri interruption, lock screen, silent switch, low-power mode; two-phone room ×4) — the sandbox has no hardware; no claims made until it runs (KI-004/015/018) | DONE (matrix ready; hardware run is human) |
+| P6-07 | Docs: ADR-0016; protocol spec (hello.client + mobile lifecycle obligations §6); testing.md §13; README (status/limitations/roadmap); prompt.md → Phase 6 record; DECISIONS D-018; KNOWN_ISSUES KI-004/015/018 updated; CHANGELOG 0.6.0; CURRENT_STATE; APP_VERSION 0.6.0 | DONE |
+
+## Phase 7+ — see `prompt.md` section 17
+
+Zoom (P7), extension (P8), more apps (P9), production (P10). All `TODO`
+and **blocked until the respective phase is approved**.

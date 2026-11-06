@@ -136,10 +136,9 @@ export default function App() {
 
       <footer className="app__footer">
         <p>
-          Phase 5 — the complete browser MVP: two people, one shared invite link. Your language is
-          translated and spoken for the other side, theirs for you, any third language is relayed
-          as original audio — offline voices, no keys, no cloud. Works best in Chrome, Edge and
-          Safari over HTTPS.
+          Two people, one shared invite link: your language is translated and spoken for the other
+          side, theirs for you, any third language is relayed as original audio — offline voices,
+          no keys, no cloud. On phones, keep this tab in the foreground while speaking.
         </p>
       </footer>
     </div>

@@ -26,6 +26,8 @@ import { FlushTracker } from '../services/flushTracker'
 import { SpeechPlayer, type PlaybackState } from '../services/playback'
 import { PlaybackGuard } from '../services/playbackGuard'
 import { surfaceNoSpeechError } from '../services/noSpeechPolicy'
+import { detectPlatform } from '../services/platform'
+import { WakeLock } from '../services/wakeLock'
 import {
   applyTranslationError,
   applyTranslationEvent,
@@ -151,6 +153,10 @@ const AUDIO_FORMAT: HelloConfig['audio'] = {
   sample_rate: TARGET_SAMPLE_RATE,
   channels: 1,
 }
+
+/** Phase 6 (KI-004): coarse platform tag sent once in the hello — lets the
+ * server's /health show which device families actually connect. */
+const CLIENT_PLATFORM = detectPlatform()
 
 /** Invite code from the URL (`?room=CODE`) — a guest opens the shared link. */
 function readInviteCode(): string | null {
@@ -315,15 +321,22 @@ export function useTranslatorSession(wsUrl: string): SessionState {
   const rejoinDeadlineRef = useRef<number | null>(null)
   const playbackEnabledRef = useRef(playbackEnabled)
   playbackEnabledRef.current = playbackEnabled
+  /** Phase 6: keeps the screen awake while the mic is open (a locked phone
+   * suspends capture within seconds). Best-effort — unsupported browsers
+   * and denials degrade silently. */
+  const wakeLockRef = useRef<WakeLock | null>(null)
+  if (wakeLockRef.current === null) {
+    wakeLockRef.current = WakeLock.fromNavigator(navigator)
+  }
 
   const configRef = useRef<HelloConfig>(
     ROOMS_ENABLED && isGuest
-      ? { role: 'guest', room: readInviteCode() ?? undefined, audio: AUDIO_FORMAT }
-      : { native_language: nativeLanguage, preferred_language: preferredLanguage, audio: AUDIO_FORMAT },
+      ? { role: 'guest', room: readInviteCode() ?? undefined, client: { platform: CLIENT_PLATFORM }, audio: AUDIO_FORMAT }
+      : { native_language: nativeLanguage, preferred_language: preferredLanguage, client: { platform: CLIENT_PLATFORM }, audio: AUDIO_FORMAT },
   )
   configRef.current =
     ROOMS_ENABLED && isGuest
-      ? { role: 'guest', room: readInviteCode() ?? undefined, audio: AUDIO_FORMAT }
+      ? { role: 'guest', room: readInviteCode() ?? undefined, client: { platform: CLIENT_PLATFORM }, audio: AUDIO_FORMAT }
       : {
           ...(ROOMS_ENABLED ? { role: 'host' as const } : {}),
           native_language: nativeLanguage,
@@ -331,6 +344,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
           ...(ROOMS_ENABLED && lastRoomCodeRef.current !== null
             ? { room: lastRoomCodeRef.current }
             : {}),
+          client: { platform: CLIENT_PLATFORM },
           audio: AUDIO_FORMAT,
         }
 
@@ -353,6 +367,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     setRecording(false)
     setFinishing(false)
     setMicLevel(0)
+    void wakeLockRef.current?.release()
     const handle = captureRef.current
     captureRef.current = null
     if (handle) await handle.stop()
@@ -589,6 +604,43 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     }
   }, [wsStatus, finalizeRecording, transcribing])
 
+  // Phase 6 (KI-004/KI-015): mobile OSes throttle or suspend microphone
+  // capture and WS timers the moment the tab is backgrounded — keeping the
+  // "recording" state alive would stream silence and trip the server's
+  // stale-seat/idle logic. A hidden tab therefore finalizes the recording
+  // the same honest way a connection loss does; returning re-arms playback
+  // in case the autoplay policy suspended it while hidden.
+  useEffect(() => {
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        if (!recordingRef.current) return
+        void finalizeRecording()
+        inFlightRef.current.clear()
+        setTranscribing(false)
+        playerRef.current?.stopAll()
+        guardRef.current.clear()
+        setError({
+          code: 'capture_paused_background',
+          message:
+            'Recording stopped — the browser suspended the tab in the background. Tap the mic to continue.',
+        })
+      } else {
+        playerRef.current?.resumeIfCreated()
+      }
+    }
+    const onPageHide = () => {
+      // Navigation away / app switch: flush what we have, quietly — banners
+      // are pointless when the page is already going away.
+      if (recordingRef.current) void finalizeRecording()
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('pagehide', onPageHide)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('pagehide', onPageHide)
+    }
+  }, [finalizeRecording])
+
   // Elapsed timer while recording.
   useEffect(() => {
     if (!recording) return
@@ -612,6 +664,18 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     playerRef.current?.resume()
     try {
       const handle = await startMicCapture({
+        onStateLost: () => {
+          // iOS/Android suspended the capture graph mid-recording (phone
+          // call, Siri, OS audio routing). Finalize honestly — the mic may
+          // come back dead even when the context resumes.
+          if (!recordingRef.current) return
+          void finalizeRecording()
+          setError({
+            code: 'capture_interrupted',
+            message:
+              'Recording stopped — the phone interrupted the microphone. Tap the mic to continue.',
+          })
+        },
         onChunk: (chunk) => {
           // Feedback-loop guard (ADR-0014): while the other participant's
           // audio is audible on THIS device, do not feed the loop — drop the
@@ -667,6 +731,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
       setElapsedMs(0)
       setTranscribing(false)
       setError(null)
+      void wakeLockRef.current?.acquire() // best-effort; no lock on denial
     } catch (err) {
       const micError = err instanceof MicCaptureError ? err : null
       setError({
@@ -676,7 +741,7 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     } finally {
       setStartingRecording(false)
     }
-  }, [flushSegment])
+  }, [flushSegment, finalizeRecording])
 
   const toggleRecording = useCallback(() => {
     if (recordingRef.current || finishingRef.current) void stopRecording()

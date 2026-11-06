@@ -21,7 +21,7 @@ def test_health_ok(client: TestClient) -> None:
     assert body["audio"] == {"encoding": "pcm_s16le", "sample_rate": 16000, "channels": 1}
     assert body["stt"]["provider"] == "fake-stt"
     assert body["stt"]["loaded"] is True
-    assert body["sessions"] == {"active": 0, "max": 50}
+    assert body["sessions"] == {"active": 0, "max": 50, "by_platform": {}}
     assert "version" in body
 
 

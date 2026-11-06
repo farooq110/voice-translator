@@ -1,9 +1,9 @@
-# prompt.md — Phase 5 Scope & Delivery Record
+# prompt.md — Phase 6 Scope & Delivery Record
 
-**Phase:** 5 of 10 — Complete Browser MVP (two participants)
+**Phase:** 6 of 10 — Mobile/browser compatibility on real devices
 **Status:** implemented — full verification round complete — **pending user approval** (§23 workflow)
-**Version:** v0.5.0
-**ADR:** [docs/decisions/0014-two-participant-rooms.md](docs/decisions/0014-two-participant-rooms.md)
+**Version:** v0.6.0
+**ADR:** [docs/decisions/0016-mobile-browser-compatibility.md](docs/decisions/0016-mobile-browser-compatibility.md)
 
 > This repository documents the **current phase only** in this file. The
 > complete master prompt (25 sections, 10-phase roadmap, approval workflow)
@@ -12,108 +12,102 @@
 > [README.md § Roadmap](README.md#roadmap-master-prompt-17); durable agent
 > rules live in [AGENT.md](AGENT.md). Branch-local deep dives: `PHASE-3.md`
 > (phase-3 branch), `PHASE-4.md` (phase-4 branch), `PHASE-5.md` (phase-5
-> branch) — each documents only its own phase.
+> branch), `PHASE-6.md` (phase-6 branch) — each documents only its own
+> phase. (Previous phases' records live on in their branch docs and the
+> CHANGELOG; this file was the Phase 5 record until 2026-11-06.)
 
 ---
 
-## 1. Phase 5 scope (master prompt §17)
+## 1. Phase 6 scope (master prompt §17)
 
-Complete the pipeline:
+Make the browser app behave correctly on real phones and modern mobile
+browsers — the phase the roadmap labels "Mobile/browser compatibility on
+real devices". Three known issues define the honest test surface:
 
-**Microphone → VAD → STT → Language Detection → Translation Decision →
-Translation (when required) → TTS (when required) → Audio Routing →
-Browser Playback**
+- **KI-004** — capture behavior on real devices: background tab, lock
+  screen, iOS interruptions.
+- **KI-015** — playback on real devices: autoplay policies, silent
+  switch, low-power mode.
+- **KI-018** — acoustic feedback on real hardware (loudspeaker→mic).
 
-Requirements:
+The sandbox has no physical device, so Phase 6 delivers (a) every behavior
+that CODE controls and that CAN be verified here, and (b) the step-by-step
+human matrix for the hardware part — with no compatibility claims made
+from the sandbox (AGENT.md §6).
 
-- Two-person browser sessions.
-- Only translator user configures language preferences.
-- Automatic source-language detection.
-- Correct translation decision.
-- Correct original audio pass-through.
-- Correct translated audio delivery.
-- Session creation and cleanup.
-- Cancellation of outdated processing.
-- Network reconnection.
-- Error recovery.
-- Latency measurements.
+## 2. Design (ADR-0016)
 
-Test scenarios (master prompt §17 Phase 5): 1. translator speaks native ·
-2. other speaks preferred · 3. translator speaks third language · 4. other
-speaks third language · 5. both speak the same language · 6. low detection
-confidence · 7. unsupported language detected · 8. network interruption ·
-9. STT/translation/TTS provider failure · 10. pass-through without TTS ·
-11. translated audio reaches only the intended recipient · 12. no feedback
-loop.
-
-## 2. Design (ADR-0014)
-
-- **Rooms.** The host creates a room at `hello` (6-char invite code, e.g.
-  `TTQJRJ`); the guest joins via the shared link `?room=CODE` and
-  configures nothing — the room's language pair IS the host's pair.
-  In-memory `RoomManager`, rooms linger 120 s (`ROOM_LINGER_SECONDS`) after
-  the last member leaves so a dropped connection rejoins with the same
-  code; then the room is destroyed.
-- **Protocol v1 stays v1 (additive):** `hello.config.role` + `.room`,
-  `peer` events (joined/left), `relay` events (original-audio pass-through:
-  one metadata JSON + one binary PCM16 frame @ 16 kHz), optional `speaker`
-  tags on transcription/translation/audio/error (present only in room
-  mode); new fatal codes `room_required` / `room_not_found` / `room_full` /
-  `missing_languages`; `/health` gains `rooms`.
-- **Routing.** Transcripts + translations are broadcast to BOTH members
-  (speaker-tagged); synthesized speech goes ONLY to the other participant
-  (a solo room falls back to the speaker — the exact Phase 1–4 behavior);
-  pass-through relays the ORIGINAL captured audio to the peer (never TTS,
-  never replayed to the speaker); translation failures are shared
-  utterance-scoped errors, TTS failures reach the audio's recipients,
-  STT-level errors stay speaker-local.
-- **Feedback-loop prevention.** Server-side: output audio is never
-  re-ingested. Client-side: `PlaybackGuard` drops uplink while a REMOTE
-  clip is audible (+300 ms tail); own-utterance TTS (solo) never arms it.
-  Browser AEC stays enabled.
+- **Honest capture lifecycle.** Mobile OSes suspend capture + timers when
+  a tab is backgrounded; the old code kept a fake "recording" state
+  streaming silence. Now: `visibilitychange → hidden` finalizes the
+  recording exactly like a connection loss (capture stopped, buffer
+  flushed, playback + feedback guard cleared) with a plain-language
+  banner; `pagehide` finalizes quietly; the capture `AudioContext` gets a
+  `statechange` watchdog (`onStateLost`) for iOS `interrupted` (calls,
+  Siri); returning to the tab re-arms playback via a resume that NEVER
+  creates an `AudioContext` (autoplay-safe `resumeIfCreated`).
+- **Screen Wake Lock** (`services/wakeLock.ts`, progressive enhancement):
+  acquired while the mic is open, released on finalize, OS-dropped
+  sentinels forgotten; denials (low-power mode) degrade silently.
+- **Coarse platform telemetry.** Protocol v1 stays v1 additively: optional
+  `hello.config.client.platform` (lowercase tag ≤ 24 chars, e.g.
+  `ios-safari` — never a raw user-agent); `/health` aggregates connected
+  clients into `sessions.by_platform`, giving the human device matrix a
+  ground-truth signal. Older clients omit it; never required; not echoed.
+- **PWA-lite + mobile comfort CSS.** `manifest.webmanifest` + generated
+  192/512 px icons + apple/mobile-web-app metas; `overscroll-behavior-y:
+  none` (no pull-to-refresh reload mid-recording); 16 px form controls
+  (no iOS focus zoom); sticky capture panel on small screens (mic always
+  reachable); ≥ 44 px touch targets; no framework, no new dependency.
 
 ## 3. Delivery record (what was built)
 
-Backend: `app/ws/rooms.py` (Room, RoomManager, linger); `audio_ws.py`
-room-aware hello/join/rejoin, `_broadcast_text`, `_audio_recipients`,
-`_send_error_to`, pass-through relay, room-aware effective config
-(guest decoded against the host's pair), leave/linger cleanup; protocol
-models (`RoomInfo`, `PeerEvent`, `RelayEvent`, `speaker` tags, optional
-languages with validation); `ROOM_LINGER_SECONDS` setting; `/health rooms`.
+Backend: `ClientInfo` protocol model (`client.platform`, optional) on
+`HelloConfig`; `Session.platform` + `/health sessions.by_platform`
+aggregation; one line in the hello handler. +7 tests (validation ×7
+params, aggregation ×2, stats shape).
 
-Frontend: invite link flow (`?room=CODE` → guest mode with NO language
-panel, room panel with the host's pair), host invite panel (code + copy
-link + peer status), speaker-aware transcript (entries keyed
-`(speaker, id)`, "Guest"/"Host" chips, RTL intact), wsClient relay pairing,
-PlaybackGuard + uplink drop while remote audio plays, room-fatal errors
-stop the reconnect loop, host reconnect re-sends its room code.
+Frontend: `services/platform.ts` (UA → coarse tag, pure); 
+`services/wakeLock.ts` (injectable wrapper); `audioCapture.onStateLost`
+watchdog (disarmed on stop — our own close never fires it); hook
+lifecycle effects (hidden/pagehide finalize + banner, visible →
+`resumeIfCreated`), wake-lock tie-in, platform tag in every hello;
+`SpeechPlayer.resumeIfCreated`; index.html metas + manifest; app.css
+mobile block; stale "Phase 1/Phase 5" page copy refreshed; version 0.6.0.
++9 frontend tests (platform mapping, wake lock incl. OS-drop/deny,
+`resumeIfCreated` never creates a context).
 
-Tests: `test_ws_rooms.py` (16 room-level tests covering scenarios
-1–11 with fakes), protocol/translation/wsClient/playbackGuard test
-extensions, `scripts/e2e_phase5_check.py` (real two-connection E2E),
-`frontend/scripts/smoke_phase5.mjs` (two real pages).
+Tests/ops: `frontend/scripts/smoke_phase6.mjs` (full iPhone emulation
+against the live server — 8 checks incl. the platform tag end-to-end and
+the background-tab guard); smoke_phase2/5 restored onto `main` and re-run
+as regressions; real-device matrix written into `docs/testing.md §13b`
+(Android Chrome / iPhone Safari / two-phone room, ~15 min).
 
-## 4. Verification (measured 2026-11-04)
+## 4. Verification (measured 2026-11-06)
 
 | Check | Result |
 | --- | --- |
-| Backend suite | **171 passed + 1 xfailed** (+16 Phase 5 room tests; the previously-skipped `tts_real` test now runs with provisioned voices) |
-| Frontend suite | **101/101 vitest** (+20: protocol parsing, relay pairing, speaker matching, PlaybackGuard), tsc clean, ESLint 0, build clean |
-| `e2e_phase5_check.py` (live :3000, real models) | **4/4 PASS** — S1 host ur → guest en voice (RMS 0.185, synth 1 677 ms incl. first-load), host receives NO audio · S2 guest en → host ur voice (RMS 0.172) · S3 host es → guest ORIGINAL relay 112 644 B @ 16 kHz RMS 0.091, zero TTS · S4 guest ur (same language both sides) → host en voice (RMS 0.200) |
-| Routing honesty (scenario 11) | asserted per utterance via ping-pong probes: the speaker's stream carries transcript + translation ONLY |
-| Latency (live, 2 vCPU) | flush→transcription ≈ 6.3–7.0 s per fixture utterance (real decode incl. detect pass), MT 143–173 ms, voice delivery 149–1 684 ms (first-load documented, KI-014) |
-| Regression: translation E2E (Phase 3 paths) | **3/3 PASS** |
-| Regression: silence guard | **PASS** |
-| Browser smoke `smoke_phase5.mjs` (two pages) | **12/12** — invite link join, guest has NO language settings, peer presence both sides, both record, zero console errors |
-| Regression: browser smoke `smoke_phase2.mjs` | **10/10** (solo flow unchanged) |
+| Backend suite | **177 passed + 1 xfailed** (fast markers; +7 Phase 6 tests) |
+| Frontend suite | **123/123 vitest** (+9 Phase 6), tsc clean, ESLint 0, build clean (263 kB) |
+| `smoke_phase6.mjs` (iPhone emulation, live :3000) | **8/8 PASS** — render, manifest, 0 px overflow, connect, `by_platform={"ios-safari":1}`, tap-start, tap-stop (honest `no_speech_detected` only), background-tab guard fires the honest banner |
+| Regression: `smoke_phase2.mjs` (solo) | **10/10** |
+| Regression: `smoke_phase5.mjs` (two pages) | **12/12** |
+| Live E2E: translation (Phase 3 paths) | **3/3 PASS** |
+| Live E2E: two-participant routing (Phase 5) | **4/4 PASS** — voices reach only the listener; relay without TTS; speaker stream carries text only |
+| Silence guard (hallucination) | **PASS** |
 
 ## 5. Honest boundaries
 
-- The acoustic feedback loop (scenario 12) is prevented architecturally
-  (no server re-ingestion — asserted) and client-side (PlaybackGuard,
-  unit-tested); real-room acoustic behavior on real hardware is a Phase 6
-  measurement (KI-004/KI-015).
-- Transcript line deletion is local-only (not synced to the peer) —
-  KI-016. Host language changes apply on the next connection — KI-017.
-- Rooms are in-memory and single-process — restarting the server ends all
-  rooms (Phase 10 scope for persistence).
+- No physical phone exists in this sandbox: everything above is device
+  EMULATION in headless Chromium. The human matrix
+  ([testing.md §13b](docs/testing.md)) — Android Chrome, iPhone Safari
+  (interruptions, silent switch, low-power mode, lock screen), acoustic
+  coupling on loudspeakers — is written and ready but NOT yet run; no
+  hardware claims are made (KI-004/KI-015/KI-018 stay open until it is).
+- Wake lock support is progressive: iOS Safari historically lacks it
+  (screen locks anyway); the app degrades to the honest-stop path.
+- The platform tag is UA-heuristic: iPadOS 13+ masquerading as desktop
+  Safari reports as desktop; accepted (observational only).
+- Transcript line deletion stays local-only (KI-016) and host language
+  changes still apply on the next connection (KI-017) — accepted Phase 5
+  scope, untouched here.

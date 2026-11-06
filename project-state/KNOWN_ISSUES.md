@@ -76,12 +76,15 @@ Format: description / reproduction / root cause / fix / verification / status.
   are unverified. No compatibility claims are made (master prompt §6).
 - **Reproduction:** n/a — cannot be tested in the sandbox (no real devices).
 - **Root cause:** Phase 6 scope.
-- **Fix:** Phase 6 test matrix (Android Chrome, desktop Chrome, iOS Safari).
-  Phase 2 delivered the closest sandbox proxy (headless Chromium with Chrome's
-  fake microphone, 10/10 smoke checks — docs/testing.md §7) and a 5-minute
-  manual desktop-Chrome checklist for the human-side verification
-  (docs/testing.md §8).
-- **Status:** OPEN (planned Phase 6).
+- **Fix (Phase 6, ADR-0016):** the code-controlled half is implemented and
+  verified under FULL device emulation (`smoke_phase6.mjs`, iPhone-class
+  viewport/touch/UA + fake mic, 8/8): honest capture lifecycle on
+  backgrounding, wake lock, PWA install, 16 px controls, sticky mic panel.
+  The hardware half is a written step-by-step human matrix
+  (docs/testing.md §13b: Android Chrome ×7, iPhone Safari ×7, two-phone
+  room ×4) — plus `/health sessions.by_platform` as ground truth that real
+  devices connected.
+- **Status:** OPEN (matrix ready — awaiting the human hardware run).
 
 ## KI-006 — RESOLVED: wrong language/script/digits in transcripts + 2–3 s latency (user report)
 
@@ -341,8 +344,13 @@ Format: description / reproduction / root cause / fix / verification / status.
   Android Chrome battery saver and background-tab/lock-screen audio are
   unmeasured.
 - **Repro:** n/a in sandbox (no real devices).
-- **Status:** OPEN — folded into the Phase 6 real-device matrix (KI-004);
-  no compatibility claims are made (AGENT.md § 6 honesty).
+- **Phase 6 mitigation (ADR-0016):** the app-side autoplay story is now
+  explicit — playback unlocks on the mic gesture (Phase 4) and re-arms when
+  the tab becomes visible again via `resumeIfCreated` (never creates a
+  context, so no autoplay warnings); backgrounding stops capture honestly.
+  Device-side behaviors (silent switch, low-power mode) are rows B5/B6 of
+  the human matrix (testing.md §13b).
+- **Status:** OPEN (app side done; hardware rows await the human run).
 
 ## KI-016 — ACCEPTED (Phase 5): transcript line deletion is local-only
 
@@ -382,8 +390,11 @@ Format: description / reproduction / root cause / fix / verification / status.
   guard's effect on natural conversation overlap, and AEC quality across
   devices.
 - **Repro:** n/a in the sandbox (no real devices).
-- **Status:** OPEN — folded into the Phase 6 real-device matrix (KI-004);
-  no real-hardware acoustic claims are made (AGENT.md § 6 honesty).
+- **Phase 6 status:** unchanged by design — the architectural + client-side
+  guards are already verified; the acoustic measurement rows (loudspeaker
+  coupling, AEC quality, overlap behavior) are section C of the human
+  matrix (testing.md §13b).
+- **Status:** OPEN (awaiting the human hardware run).
 
 ---
 

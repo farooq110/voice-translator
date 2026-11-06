@@ -25,7 +25,16 @@ export interface HelloConfig {
   /** Invite code — a guest MUST present it; a host may re-send its own code
    * to rejoin after a network drop (the room lingers briefly). */
   room?: string
+  /** Phase 6 (KI-004): coarse self-reported platform tag, e.g. "ios-safari".
+   * Optional — the server only aggregates it into /health. */
+  client?: ClientInfo
   audio: AudioFormat
+}
+
+/** Phase 6: optional hello client description. A short tag — never a raw
+ * user-agent string. */
+export interface ClientInfo {
+  platform: string
 }
 
 // ---------------- client → server ----------------
