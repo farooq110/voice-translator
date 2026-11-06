@@ -152,7 +152,8 @@ def test_flush_utterance_id_echoed_on_error(client: TestClient) -> None:
         ws.send_json({"v": 1, "type": "flush"})
         err2 = ws.receive_json()
         assert err2["code"] == "nothing_to_transcribe"
-        assert err2["utterance_id"] is None
+        # Phase 5 serialization: null fields are omitted (absent ≡ null)
+        assert err2.get("utterance_id") is None
 
 
 def test_ping_pong_echo(client: TestClient) -> None:
@@ -284,3 +285,34 @@ def test_malformed_binary_after_hello_nonfatal(client: TestClient) -> None:
         tr = ws.receive_json()
         # only the valid audio must have been transcribed
         assert tr["audio_duration_s"] == pytest.approx(0.3, abs=0.01)
+
+
+def test_client_platform_reported_in_health(client: TestClient) -> None:
+    """Phase 6 (KI-004): the self-reported platform tag lands in
+    /health sessions.by_platform — and is never echoed into `ready`."""
+    tagged = {
+        **HELLO,
+        "config": {**HELLO["config"], "client": {"platform": "ios-safari"}},
+    }
+    with _open(client) as ws:
+        ws.send_json(tagged)
+        ready = ws.receive_json()
+        assert ready["type"] == "ready"
+        assert "client" not in ready
+        body = client.get("/health").json()
+    assert body["sessions"]["by_platform"] == {"ios-safari": 1}
+    assert body["sessions"]["active"] == 1
+
+
+def test_client_platform_absent_keeps_health_clean(client: TestClient) -> None:
+    """A hello without `client` (Phase 1–5 shape) aggregates nothing."""
+    with _open(client) as ws:
+        ws.send_json(HELLO)
+        assert ws.receive_json()["type"] == "ready"
+    for _ in range(20):
+        if client.get("/health").json()["sessions"]["active"] == 0:
+            break
+        import time
+
+        time.sleep(0.05)
+    assert client.get("/health").json()["sessions"]["by_platform"] == {}

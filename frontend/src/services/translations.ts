@@ -22,20 +22,34 @@ export interface TranslationErrorInfo {
   code: string
 }
 
-/** Any transcript entry that can carry a translation outcome. */
-export interface TranslationCarrier {
-  id: string
-  translation?: TranslationInfo
-  translationError?: TranslationErrorInfo
+/** Phase 4: a TTS problem attached to the utterance (text kept, audio lost). */
+export interface VoiceErrorInfo {
+  code: string
 }
 
-/** Attach a `translation` event to exactly its utterance (by id). */
+/** Any transcript entry that can carry a translation outcome. `speaker` is
+ * Phase 5 (ADR-0014): utterance ids are only unique PER CONNECTION, so
+ * outcomes are matched against BOTH the id and the speaker (undefined on
+ * both sides in solo mode — the exact Phase 3/4 matching). */
+export interface TranslationCarrier {
+  id: string
+  speaker?: string
+  translation?: TranslationInfo
+  translationError?: TranslationErrorInfo
+  voiceError?: VoiceErrorInfo
+}
+
+function sameUtterance(entry: TranslationCarrier, id: string, speaker: string | undefined): boolean {
+  return entry.id === id && (entry.speaker ?? undefined) === (speaker ?? undefined)
+}
+
+/** Attach a `translation` event to exactly its utterance (by id + speaker). */
 export function applyTranslationEvent<T extends TranslationCarrier>(
   entries: readonly T[],
   event: TranslationEvent,
 ): T[] {
   return entries.map((entry) =>
-    entry.id === event.id
+    sameUtterance(entry, event.id, event.speaker)
       ? {
           ...entry,
           translation: {
@@ -46,6 +60,7 @@ export function applyTranslationEvent<T extends TranslationCarrier>(
             durationMs: event.duration_ms,
           },
           translationError: undefined,
+          voiceError: undefined,
         }
       : entry,
   )
@@ -63,15 +78,60 @@ export function isTranslationErrorCode(code: string): boolean {
   return TRANSLATION_ERROR_CODES.includes(code)
 }
 
-/** Attach a translation error to exactly its utterance (by id). */
+/** Attach a translation error to exactly its utterance (by id + speaker). */
 export function applyTranslationError<T extends TranslationCarrier>(
   entries: readonly T[],
   utteranceId: string,
   code: string,
+  speaker?: string,
 ): T[] {
   return entries.map((entry) =>
-    entry.id === utteranceId ? { ...entry, translationError: { code } } : entry,
+    sameUtterance(entry, utteranceId, speaker) ? { ...entry, translationError: { code } } : entry,
   )
+}
+
+const VOICE_ERROR_CODES: readonly string[] = [
+  'tts_failed',
+  'tts_timeout',
+  'tts_rate_limited',
+  'tts_unsupported_language',
+  'tts_text_too_long',
+]
+
+/** True for the utterance-scoped TTS error codes (handled per line, never
+ * as the global banner — the translated text is always kept). */
+export function isVoiceErrorCode(code: string): boolean {
+  return VOICE_ERROR_CODES.includes(code)
+}
+
+/** Attach a voice error to exactly its utterance (by id + speaker). */
+export function applyVoiceError<T extends TranslationCarrier>(
+  entries: readonly T[],
+  utteranceId: string,
+  code: string,
+  speaker?: string,
+): T[] {
+  return entries.map((entry) =>
+    sameUtterance(entry, utteranceId, speaker) ? { ...entry, voiceError: { code } } : entry,
+  )
+}
+
+/** Human text for an utterance-scoped voice error chip (Phase 4). */
+export function voiceErrorText(code: string): string {
+  switch (code) {
+    case 'tts_failed':
+      return 'voice failed · text kept'
+    case 'tts_timeout':
+      return 'voice timed out · text kept'
+    case 'tts_rate_limited':
+      return 'voice skipped · rate limit'
+    case 'tts_unsupported_language':
+      return 'no voice for this language · text kept'
+    case 'tts_text_too_long':
+      return 'too long to speak · text kept'
+    default:
+      return code
+  }
 }
 
 /** Chip text for a transcription's decision (badge / pass-through reason). */

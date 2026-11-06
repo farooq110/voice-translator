@@ -1,98 +1,109 @@
-# User Manual — AI Voice Translator (transcription + translation)
+# How to use the AI Voice Translator
 
-*This manual belongs to the `phase-3` branch and covers ONLY what this
-branch's code does: live transcription PLUS the translation decision
-engine — your language is translated to the configured target, any third
-language passes through untouched. There is no spoken output and no
-two-person mode in this branch.*
+*This is the user manual for `main` — the current app (v0.6.0). It covers
+only what this branch implements: live transcription, the translation
+decision engine, spoken translations, two-person rooms, and the mobile
+lifecycle behaviors.*
 
 ---
 
-## What this app does
+## Start here (60 seconds)
 
-You pick a native and a preferred language, tap the microphone, and speak.
-Sentences are transcribed live and — when translation makes sense —
-translated, with the decision shown right on each line:
+1. Start the server: `bash start.sh` → open `http://localhost:3000`.
+2. Pick **Native language** (what you speak) and **Preferred translation
+   language** (what the other person should hear).
+3. Tap the microphone and talk. Sentences appear in the transcript as you
+   pause; the other side hears them spoken in their language.
+4. To add the second person: press **copy invite link** and send it to
+   them. They open it, allow the microphone, and talk. Done.
 
-- You speak your **native** language → translated into the preferred one.
-- You speak the **preferred** language → translated into the native one.
-- You speak a **third language** → NOT translated: the original text is
-  kept and marked `pass-through · third language`.
-- Same language on both sides, or a low-confidence detection → honest
-  pass-through with the reason on the chip.
+That's the whole loop. The rest of this file explains each part of the
+page and what to do when something looks wrong.
 
-Everything runs on this server (local Whisper + offline OPUS-MT models —
-no cloud, no API keys).
+## The page, top to bottom
 
-## Start here
+### Header
+The app title and a **connection badge**. Recording only unlocks when the
+badge says *Connected*. If it says *Reconnecting…*, the app is already
+retrying — wait for green.
 
-1. `bash start.sh` → open `http://localhost:3000`.
-2. Wait for **Connected**.
-3. Pick **Native language** and **Preferred translation language**.
-4. Tap the mic and talk — translated text appears under each original
-   line as it is produced.
+### Room panel
+Your **invite code** and a **copy invite link** button. The link is the
+only thing the second person needs — no install, no settings on their
+side. Once they join, the panel shows *Both participants connected*; when
+they leave, *Waiting for the other participant* returns.
 
-## The page, piece by piece
-
-### Header + connection badge
-Same as ever: the mic unlocks only when the badge is green.
-
-### Language panel
-Native = what you speak (pinned for recognition). Preferred = the target
-language. Hints under the selectors spell out what will happen to your
-speech.
+### Your languages (host only)
+Two selectors with hints. The **guest never sees this panel** — the room
+carries your pair to them. Changing languages applies from the next
+connection onward.
 
 ### Microphone panel
-- **Mic button** — tap to start/stop; red + pulsing while live.
-- **Status line** — *Connected…*, *Hands-free listening… N s*,
-  *Push-to-talk recording…*, *Transcribing…*, *Finishing…*.
-- **Level meter** — voice dance; flat = wrong device.
-- **Hands-free toggle** — ON: sentence-per-pause while you keep talking.
-  OFF: push-to-talk, one press = one transcription.
+- **Mic button** — tap to start/stop. Red + pulsing = live.
+- **Status line** — always tells the truth: listening, push-to-talk
+  recording, transcribing, finishing, or why it stopped.
+- **Level meter** — moves with your voice; if it never moves, check the
+  browser's mic device.
+- **Hands-free** — ON cuts sentences at natural pauses while you keep
+  talking; OFF is classic push-to-talk (one press = one transcription).
+- **Spoken translations** — voice output on/off; **stop voice** appears
+  while audio is playing.
 
-### Transcript panel — the heart of this branch
-Newest line on top; each line carries:
+### Transcript
+Newest line on top. Every line shows: the original text, detected
+language + confidence, the **decision badge** (`UR → EN`, `pass-through ·
+third language`, `same language`, …), the translated text when produced,
+and per-line warning chips if translation/voice failed (the original text
+is kept). Lines carry a **Host/Guest chip** in rooms. **✕** deletes a line
+from your own screen and stops its audio.
 
-- the **original text** with detected language + confidence chip;
-- a **decision badge** — `UR → EN` (will translate / translated),
-  `pass-through · third language`, `pass-through · identical config`,
-  `pass-through · low confidence`, `pair unavailable`, etc. The badge says
-  WHY, so nothing is a mystery;
-- the **translated text below the original** when a translation was
-  produced (RTL scripts render right-to-left correctly);
-- a small **warning chip** if translation failed or timed out — the
-  original text is NEVER lost to a translation error;
-- **✕ deletes the line** from your screen.
+## The other person's page (guest view)
 
-### Error banner
-Connection-level problems only. Utterance-level translation issues stay on
-the line as chips, by design.
+They open your invite link, allow the microphone, and see: a short
+confirmation, the host's language pair, a mic button and the shared
+transcript. That's all — deliberately. Their translations arrive as voice
+on their device; the host's arrive on the host's. Nobody hears their own
+words translated back at them. A third language (outside the configured
+pair) crosses as the speaker's real voice — relayed audio, never
+machine-spoken.
 
-## Reading the decision badges
+## Speaking rules the app follows
 
-| Badge | Meaning |
+| What is spoken | What the other side gets |
 | --- | --- |
-| `UR → EN` (direction varies) | Your utterance is being translated into the configured target. |
-| `pass-through · third language` | You spoke a language outside the configured pair — original kept, nothing invented. |
-| `pass-through · identical config` | Native = preferred; nothing to translate. |
-| `pass-through · low confidence` | Detection was unsure — showing the original rather than guessing. |
-| `pair unavailable` | No offline model for this pair in this deployment. |
+| Host's native language | Voice in the preferred language |
+| Host's preferred language | Voice in the native language |
+| Any third language | The original audio, relayed untouched |
+| Identical native+preferred settings | Pass-through (no translation needed) |
 
-## Good to know
+## On a phone
 
-- Translations for everyday sentences are solid; nuanced or long Urdu →
-  English is honest-tier, not professional-tier (small offline models).
-- A reload clears the transcript.
-- If the connection drops mid-recording, recording stops with a banner and
-  reconnects automatically.
-- `server_busy` drops that segment by design under load — keep talking.
+- **Install:** use the browser's *Add to Home Screen*; the app opens
+  full-screen from its icon.
+- **Backgrounding/locking/interrupted by a call:** the recording stops
+  right away with a clear banner (the OS suspends the mic — the app never
+  fakes it). Tap the mic when you're back.
+- **Screen wake:** requested only while the mic is open.
+- The mic panel stays visible while long transcripts scroll; swiping down
+  cannot reload the app mid-recording.
 
 ## Troubleshooting
 
 | Symptom | Meaning → action |
 | --- | --- |
-| Every line says `pair unavailable` | MT models not provisioned → `backend/scripts/download_translation_models.py`, restart. |
-| Badge shows translation but no text after it | Translation still running, or failed → wait a beat; a warning chip appears on failure. |
-| Wrong source language detected | Detection is automatic for non-pinned speech; check the confidence chip and speak a full sentence. |
-| *no speech detected* | Noise/silence only → speak closer to the mic. |
-| Badge stuck on *Connecting…* | Server down → check `start.sh`, reload. |
+| Badge stuck on *Connecting…* | Server down/restarting → check `bash start.sh` output, reload the page. |
+| *no speech detected* | Noise or silence only → speak a little louder/closer. |
+| Level meter flat | Wrong input device → pick the mic in the browser's site settings. |
+| *pass-through · pair unavailable* | The offline MT pair for those languages isn't provisioned → run `backend/scripts/download_translation_models.py`. |
+| Voice never plays | Spoken-translations toggle off, or voices not provisioned → check the toggle and `/health` (`tts.languages`). |
+| *room full* | Two people are already in the room → rooms hold exactly two. |
+| Guest lost the room after a long offline gap | Room expired (~2 min linger) → host sends a fresh link. |
+| *server_busy* notice | That segment was dropped by design under heavy load → keep talking; the next segment is processed normally. |
+
+## Notes
+
+- Everything — recognition, translation, voices — runs on this server;
+  no audio or text goes to any cloud service.
+- Transcripts live only in the page; a reload clears them.
+- Deleting a line is local to your device; the other participant keeps
+  their copy.

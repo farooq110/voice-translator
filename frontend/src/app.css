@@ -430,6 +430,41 @@ body {
   color: var(--muted);
 }
 
+/* ---------- spoken playback (Phase 4, ADR-0013) ---------- */
+
+.chip--speaking {
+  background: var(--accent);
+  color: #fff;
+  animation: speaking-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes speaking-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.stop-voice {
+  align-self: flex-start;
+  border: 1px solid var(--accent);
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.stop-voice:hover {
+  background: var(--accent-soft);
+}
+
 .transcript-translation {
   margin-top: 4px;
   display: flex;
@@ -535,4 +570,106 @@ body {
 
 .banner__dismiss:focus-visible {
   outline: 2px solid var(--bad);
+}
+
+/* --- Phase 5 (ADR-0014): two-participant room ---------------------------- */
+
+.room-panel__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.room-panel__code {
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: 0.28em;
+  padding: 6px 14px 6px 18px;
+  border-radius: 10px;
+  background: var(--panel-strong, rgba(127, 127, 127, 0.14));
+  user-select: all;
+}
+
+.room-panel__copy {
+  border: 1px solid var(--border, rgba(127, 127, 127, 0.35));
+  background: transparent;
+  color: inherit;
+  border-radius: 10px;
+  padding: 7px 12px;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.room-panel__copy:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.room-panel__copy:focus-visible {
+  outline: 2px solid var(--accent, #4a7dff);
+}
+
+.room-panel__hint {
+  margin: 4px 0 10px;
+  font-size: 0.88rem;
+  opacity: 0.75;
+}
+
+.room-panel__peer {
+  margin: 6px 0 0;
+  font-size: 0.85rem;
+  opacity: 0.65;
+}
+
+.room-panel__peer--live {
+  opacity: 1;
+  color: var(--ok, #2e9e5b);
+}
+
+.chip--peer {
+  background: var(--accent-soft, rgba(74, 125, 255, 0.16));
+  color: var(--accent, #4a7dff);
+  font-weight: 600;
+}
+
+.transcript-item--peer {
+  border-start-start-radius: 4px;
+}
+
+/* ---------- Phase 6: real-device comfort (KI-004/KI-015) ---------- */
+
+/* Kill pull-to-refresh / rubber-banding: on a phone an accidental swipe
+   used to reload the app mid-recording. Tap highlights stay invisible —
+   the components style their own pressed states. */
+html,
+body {
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (max-width: 640px) {
+  /* iOS zooms any focused control set below 16px — pin the form controls
+     so choosing a language never zooms the viewport. */
+  .field__select,
+  .handsfree input,
+  .playback-toggle input {
+    font-size: 16px;
+  }
+
+  /* Keep the mic reachable on long transcripts: the capture panel follows
+     the scroll, floating above the home-indicator safe area. */
+  .capture-panel {
+    position: sticky;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    z-index: 10;
+    box-shadow: var(--shadow), 0 -8px 24px rgb(13 20 29 / 0.18);
+  }
+
+  /* Comfortable thumb targets for the row of controls under the mic. */
+  .handsfree,
+  .playback-toggle,
+  .stop-voice {
+    min-height: 44px;
+  }
 }

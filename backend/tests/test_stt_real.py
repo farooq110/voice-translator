@@ -166,7 +166,7 @@ def test_full_ws_pipeline_real_vad_and_stt() -> None:
     # STT pipeline, not the Phase 3 decision engine.
     from app.config import Settings
 
-    app = create_app(settings=Settings(translation_provider="none"))
+    app = create_app(settings=Settings(translation_provider="none", tts_provider="none"))
     with TestClient(app) as client:
         with client.websocket_connect("/ws/audio") as ws:
             ws.send_json(HELLO_UR)

@@ -38,11 +38,11 @@ def _open(client: TestClient):
 
 
 def _auto_settings(**overrides) -> Settings:
-    return Settings(translation_provider="fake", translation_detect_mode="auto", **overrides)
+    return Settings(translation_provider="fake", translation_detect_mode="auto", tts_provider="none", **overrides)
 
 
 def _pinned_settings(**overrides) -> Settings:
-    return Settings(translation_provider="fake", translation_detect_mode="pinned", **overrides)
+    return Settings(translation_provider="fake", translation_detect_mode="pinned", tts_provider="none", **overrides)
 
 
 def _say(ws, seconds: float = 0.5, utterance_id: str | None = None) -> None:
@@ -165,7 +165,7 @@ def test_third_language_passes_through_without_translation() -> None:
     app = create_app(
         stt=stt,
         vad=PassThroughVAD(),
-        settings=Settings(translation_provider="none"),
+        settings=Settings(translation_provider="none", tts_provider="none"),
         translator=service,
     )
     with TestClient(app) as client, _open(client) as ws:
@@ -176,7 +176,7 @@ def test_third_language_passes_through_without_translation() -> None:
         tr = _receive_until(ws, "transcription")
         assert tr["decision"]["action"] == "passthrough"
         assert tr["decision"]["reason"] == "third_language"
-        assert tr["decision"]["target_language"] is None
+        assert tr["decision"].get("target_language") is None  # absent ≡ null
 
         ws.send_json({"v": 1, "type": "ping", "ts": 77})
         pong = ws.receive_json()
@@ -239,7 +239,7 @@ def test_unsupported_pair_passes_through() -> None:
     app = create_app(
         stt=stt,
         vad=PassThroughVAD(),
-        settings=Settings(translation_provider="none"),
+        settings=Settings(translation_provider="none", tts_provider="none"),
         translator=service,
     )
     with TestClient(app) as client, _open(client) as ws:
@@ -263,7 +263,7 @@ def test_provider_failure_is_utterance_scoped_non_fatal() -> None:
     app = create_app(
         stt=stt,
         vad=PassThroughVAD(),
-        settings=Settings(translation_provider="none"),
+        settings=Settings(translation_provider="none", tts_provider="none"),
         translator=service,
     )
     with TestClient(app) as client, _open(client) as ws:
@@ -293,7 +293,7 @@ def test_rate_limited_translation_is_utterance_scoped() -> None:
     app = create_app(
         stt=stt,
         vad=PassThroughVAD(),
-        settings=Settings(translation_provider="none"),
+        settings=Settings(translation_provider="none", tts_provider="none"),
         translator=service,
     )
     with TestClient(app) as client, _open(client) as ws:

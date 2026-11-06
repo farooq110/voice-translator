@@ -92,9 +92,41 @@ class Settings(BaseSettings):
     libretranslate_url: str = ""
     libretranslate_api_key: str = ""
 
+    # --- Text-to-speech (Phase 4, ADR-0013) ---
+    # `piper` — offline Piper neural voices under `tts_voices_dir`
+    #           (one directory per language, e.g. models/tts/ur/); provision
+    #           with backend/scripts/download_tts_voices.py. No keys, no GPU,
+    #           no network; audio never leaves the machine.
+    # `fake`  — deterministic sine-tone stub for tests/demos.
+    # `none`  — TTS disabled: translated text is displayed, never spoken.
+    tts_provider: str = "piper"
+    tts_timeout_s: float = 10.0
+    tts_rate_limit_per_minute: int = 30
+    tts_max_concurrent: int = 1
+    # Synthesizing a novel-length text would produce minutes of audio; texts
+    # above this bound keep their translated text but are not spoken.
+    tts_max_text_chars: int = 800
+    tts_worker_threads: int = 1
+    tts_voices_dir: str = "models/tts"
+
     # --- Sessions / security ---
     max_sessions: int = 50
     cors_origins: str = ""
+
+    # --- Two-participant rooms (Phase 5, ADR-0014) ---
+    # How long an empty room survives after its last member leaves — the
+    # reconnection window in which a dropped client can rejoin with the same
+    # invite code. 0 disables lingering (rooms die with their last member).
+    room_linger_seconds: float = 120.0
+    # QA round (BUG-002): a proxy in front of the server can swallow a dead
+    # client's disconnect, so a seat may stay occupied by a GHOST long after
+    # the participant is gone (the app-level idle timeout only fires at
+    # ws_idle_timeout_seconds=180). When a rejoin finds its own seat occupied
+    # by a member that has sent NOTHING for longer than this, the seat is
+    # reclaimed for the returning participant. Must stay well above the
+    # client heartbeat (4 s ping interval) so a live-but-quiet member is
+    # never evicted.
+    room_stale_seat_seconds: float = 12.0
 
 
 @lru_cache

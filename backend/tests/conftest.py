@@ -182,7 +182,7 @@ def fake_stt() -> FakeSTT:
 # Phase 1/2 semantics for the protocol tests: translation DISABLED (no
 # decisions, pinned STT hint). Phase 3 behavior is covered in
 # test_ws_translation.py / test_translation_*.py with explicit settings.
-NO_TRANSLATION_SETTINGS = Settings(translation_provider="none")
+NO_TRANSLATION_SETTINGS = Settings(translation_provider="none", tts_provider="none")
 
 
 @pytest.fixture()

@@ -18,7 +18,7 @@ import {
   pingMessage,
   ProtocolError,
 } from '../types/protocol'
-import type { ClientMessage, HelloConfig, ServerEvent } from '../types/protocol'
+import type { AudioEvent, ClientMessage, HelloConfig, RelayEvent, ServerEvent } from '../types/protocol'
 
 export type WsStatus = 'idle' | 'connecting' | 'connected' | 'reconnecting' | 'closed' | 'error'
 
@@ -26,6 +26,13 @@ export interface WsClientHandlers {
   onStatus: (status: WsStatus) => void
   onEvent: (event: ServerEvent) => void
   onProtocolError: (error: ProtocolError) => void
+  /** Phase 4 (ADR-0013): the `audio` metadata event is NOT delivered via
+   * `onEvent` — it is paired with the NEXT binary frame (WebSocket ordering
+   * guarantees it follows) and delivered here as one playable unit. */
+  onAudio?: (meta: AudioEvent, pcm: ArrayBuffer) => void
+  /** Phase 5 (ADR-0014): same pairing contract for the pass-through
+   * `relay` event (original audio for the OTHER participant). */
+  onRelay?: (meta: RelayEvent, pcm: ArrayBuffer) => void
 }
 
 export interface WsClientOptions {
@@ -39,7 +46,12 @@ export interface WsClientOptions {
   maxBackoffMs?: number
 }
 
-const DEFAULT_PING_MS = 20_000
+/** QA round (BUG-002): 4 s heartbeat. The server tracks the last frame it
+ * RECEIVED per connection and reclaims a rejoin-blocking ghost seat after
+ * 12 s of silence — a 20 s heartbeat would let a live-but-quiet member
+ * look stale. 4 s keeps every live member comfortably under the threshold
+ * (and still detects a dead uplink within ~14 s via the pong timeout). */
+const DEFAULT_PING_MS = 4_000
 const DEFAULT_PONG_TIMEOUT_MS = 10_000
 const DEFAULT_MAX_BACKOFF_MS = 10_000
 const BASE_BACKOFF_MS = 600
@@ -61,6 +73,11 @@ export class TranslatorWsClient {
   private pongTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private droppedChunks = 0
+  /** Phase 4/5: metadata of the most recent `audio` OR `relay` event,
+   * waiting for its binary frame (overwritten with a warning if a protocol
+   * violation ever interleaves). */
+  private pendingMedia: { kind: 'audio' | 'relay'; meta: AudioEvent | RelayEvent } | null = null
+  private strayBinaryFrames = 0
 
   constructor(private readonly options: WsClientOptions) {}
 
@@ -111,6 +128,11 @@ export class TranslatorWsClient {
     return this.droppedChunks
   }
 
+  /** Binary frames ignored because no `audio` metadata preceded them. */
+  get strayBinaryFrameCount(): number {
+    return this.strayBinaryFrames
+  }
+
   /** Flush the server buffer. `utteranceId` (BUG-001) is the client-generated
    * correlation id echoed on the transcription/error for this flush, so the
    * session hook can settle exactly that utterance's pending state. */
@@ -120,6 +142,52 @@ export class TranslatorWsClient {
   }
 
   // ------------------------------------------------------------- internals
+
+  private handleTextFrame(raw: string): void {
+    let event_: ServerEvent
+    try {
+      event_ = parseServerEvent(raw)
+    } catch (error) {
+      if (error instanceof ProtocolError) {
+        this.options.handlers.onProtocolError(error)
+        return
+      }
+      throw error
+    }
+    if (event_.type === 'ready') {
+      this.ready = true
+      this.attempt = 0
+      this.clearPongTimer()
+      this.setStatus('connected')
+    }
+    if (event_.type === 'pong') {
+      this.clearPongTimer()
+    }
+    if (event_.type === 'audio' || event_.type === 'relay') {
+      // Pair with the following binary frame (delivered via onAudio/onRelay).
+      if (this.pendingMedia !== null) {
+        console.warn('[ws] media metadata arrived without its binary frame — replaced')
+      }
+      this.pendingMedia = { kind: event_.type, meta: event_ }
+      return
+    }
+    this.options.handlers.onEvent(event_)
+  }
+
+  private handleBinaryFrame(data: ArrayBuffer): void {
+    const pending = this.pendingMedia
+    this.pendingMedia = null
+    if (pending === null) {
+      // Not part of the protocol today — ignore without crashing.
+      this.strayBinaryFrames += 1
+      return
+    }
+    if (pending.kind === 'audio') {
+      this.options.handlers.onAudio?.(pending.meta as AudioEvent, data)
+    } else {
+      this.options.handlers.onRelay?.(pending.meta as RelayEvent, data)
+    }
+  }
 
   private sendJson(message: ClientMessage): void {
     if (this.ws === null || this.ws.readyState !== WebSocket.OPEN) return
@@ -148,27 +216,11 @@ export class TranslatorWsClient {
       this.startPingLoop()
     }
     ws.onmessage = (event: MessageEvent) => {
-      if (typeof event.data !== 'string') return // protocol v1 is text-only inbound
-      let event_: ServerEvent
-      try {
-        event_ = parseServerEvent(event.data)
-      } catch (error) {
-        if (error instanceof ProtocolError) {
-          this.options.handlers.onProtocolError(error)
-          return
-        }
-        throw error
+      if (typeof event.data === 'string') {
+        this.handleTextFrame(event.data)
+      } else {
+        this.handleBinaryFrame(event.data)
       }
-      if (event_.type === 'ready') {
-        this.ready = true
-        this.attempt = 0
-        this.clearPongTimer()
-        this.setStatus('connected')
-      }
-      if (event_.type === 'pong') {
-        this.clearPongTimer()
-      }
-      this.options.handlers.onEvent(event_)
     }
 
     ws.onerror = () => {
@@ -179,6 +231,7 @@ export class TranslatorWsClient {
       this.clearTimers()
       this.ready = false
       this.ws = null
+      this.pendingMedia = null
       if (this.manualClose) {
         this.setStatus('closed')
         return
@@ -204,8 +257,12 @@ export class TranslatorWsClient {
       if (this.ws === null || this.ws.readyState !== WebSocket.OPEN) return
       const ts = Date.now()
       this.sendJson(pingMessage(ts))
+      // QA round (BUG-002): the pong deadline is armed ONCE per unanswered
+      // ping — a new ping must NOT extend the deadline of a ping that was
+      // never answered, otherwise a 4 s heartbeat with a 10 s timeout could
+      // never detect a dead connection (each new ping reset the clock).
+      if (this.pongTimer !== null) return
       const timeout = this.options.pongTimeoutMs ?? DEFAULT_PONG_TIMEOUT_MS
-      this.clearPongTimer()
       this.pongTimer = setTimeout(() => {
         // No pong in time → treat the connection as dead; onclose will
         // trigger the reconnect path.

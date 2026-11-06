@@ -76,12 +76,15 @@ Format: description / reproduction / root cause / fix / verification / status.
   are unverified. No compatibility claims are made (master prompt §6).
 - **Reproduction:** n/a — cannot be tested in the sandbox (no real devices).
 - **Root cause:** Phase 6 scope.
-- **Fix:** Phase 6 test matrix (Android Chrome, desktop Chrome, iOS Safari).
-  Phase 2 delivered the closest sandbox proxy (headless Chromium with Chrome's
-  fake microphone, 10/10 smoke checks — docs/testing.md §7) and a 5-minute
-  manual desktop-Chrome checklist for the human-side verification
-  (docs/testing.md §8).
-- **Status:** OPEN (planned Phase 6).
+- **Fix (Phase 6, ADR-0016):** the code-controlled half is implemented and
+  verified under FULL device emulation (`smoke_phase6.mjs`, iPhone-class
+  viewport/touch/UA + fake mic, 8/8): honest capture lifecycle on
+  backgrounding, wake lock, PWA install, 16 px controls, sticky mic panel.
+  The hardware half is a written step-by-step human matrix
+  (docs/testing.md §13b: Android Chrome ×7, iPhone Safari ×7, two-phone
+  room ×4) — plus `/health sessions.by_platform` as ground truth that real
+  devices connected.
+- **Status:** OPEN (matrix ready — awaiting the human hardware run).
 
 ## KI-006 — RESOLVED: wrong language/script/digits in transcripts + 2–3 s latency (user report)
 
@@ -311,3 +314,148 @@ Format: description / reproduction / root cause / fix / verification / status.
   correct (see docs/testing.md §4).
 - **Verification:** `uv run pytest -m stt_real` — 3 passed + 1 xfail.
 - **Status:** RESOLVED (recorded for provenance of fixture choice).
+
+---
+
+## KI-014 — ACCEPTED: first synthesis into a language pays the voice load (Phase 4)
+
+- **Description:** the first translated utterance into a language with no
+  loaded voice takes ~1.5 s longer (Piper voice lazy-load, measured in the
+  live E2E: Rule 1 synthesis 1 573 ms incl. load vs 546 ms for the second
+  language).
+- **Root cause:** `PiperTTSProvider.ensure_loaded()` is a deliberate no-op —
+  eager loading of all three voices would cost ~4.5 s of boot time and
+  ~300 MB RSS for latency the user rarely notices (synthesis is otherwise
+  RTF ≈ 0.06–0.08).
+- **Fix / mitigation:** documented trade-off (ADR-0013); the load happens
+  during the user's own utterance decode + translation window, so perceived
+  delay is minimal; `/health` shows provisioned languages so missing voices
+  are visible.
+- **Status:** ACCEPTED (revisit if a future phase needs guaranteed
+  constant synthesis latency).
+
+---
+
+## KI-015 — OPEN (Phase 6 scope): audio playback untested on real devices
+
+- **Description:** spoken-output playback is verified in headless Chromium
+  (smoke 10/10) and by unit tests with an injected fake AudioContext, but
+  iOS Safari (low-power mode blocks autoplay, silent-switch behavior),
+  Android Chrome battery saver and background-tab/lock-screen audio are
+  unmeasured.
+- **Repro:** n/a in sandbox (no real devices).
+- **Phase 6 mitigation (ADR-0016):** the app-side autoplay story is now
+  explicit — playback unlocks on the mic gesture (Phase 4) and re-arms when
+  the tab becomes visible again via `resumeIfCreated` (never creates a
+  context, so no autoplay warnings); backgrounding stops capture honestly.
+  Device-side behaviors (silent switch, low-power mode) are rows B5/B6 of
+  the human matrix (testing.md §13b).
+- **Status:** OPEN (app side done; hardware rows await the human run).
+
+## KI-016 — ACCEPTED (Phase 5): transcript line deletion is local-only
+
+- **Description:** deleting a sentence bubble removes it (and stops its
+  playback) on the deleting device only — the other participant keeps the
+  line. There is no cross-device deletion sync in the protocol.
+- **Root cause:** deliberate Phase 5 scope control: a `delete` control
+  message, peer-side cancellation and conflict rules add protocol surface
+  that the master prompt does not require for the MVP.
+- **Status:** ACCEPTED for the MVP; revisit with the meeting-integration
+  phases if shared-moderation becomes a requirement.
+
+---
+
+## KI-017 — ACCEPTED (Phase 5): host language changes apply on the next connection
+
+- **Description:** the room's language pair is captured at the host's
+  `hello` (it is the room's config authority). Changing the selectors
+  mid-room does not re-greet the server; the new pair applies when the
+  host's client reconnects (config is read at connect time — unchanged
+  since Phase 1).
+- **Repro:** open a room, change languages, speak — decisions still use the
+  room's original pair until reconnect.
+- **Status:** ACCEPTED (consistent with the Phase 1–4 config-at-connect
+  behavior); a live re-hello control message is a possible future
+  extension.
+
+---
+
+## KI-018 — OPEN (Phase 6 scope): two-participant acoustics on real hardware
+
+- **Description:** the feedback loop (scenario 12) is prevented
+  architecturally (the server never re-ingests delivered audio — asserted
+  in the room tests and the live E2E) and client-side (PlaybackGuard mutes
+  the uplink while remote audio is audible, unit-tested). What is NOT
+  measured: loudspeaker→mic coupling on real laptop/phone hardware, the
+  guard's effect on natural conversation overlap, and AEC quality across
+  devices.
+- **Repro:** n/a in the sandbox (no real devices).
+- **Phase 6 status:** unchanged by design — the architectural + client-side
+  guards are already verified; the acoustic measurement rows (loudspeaker
+  coupling, AEC quality, overlap behavior) are section C of the human
+  matrix (testing.md §13b).
+- **Status:** OPEN (awaiting the human hardware run).
+
+---
+
+## KI-019 — RESOLVED (QA round, BUG-001): HuggingFace 429 left the deployment's TTS voiceless
+
+- **Description (QA Journal 2026-11-05):** the deployed server had ZERO
+  usable Piper voices (`/health tts.languages=[]`) — every translated
+  utterance answered `tts_unsupported_language` and no synthesized audio
+  ever reached any browser. En/ur directories held a voice `.onnx` each but
+  NOT their `.onnx.json` configs; `es/` was empty.
+- **Root cause:** HuggingFace answers **HTTP 429** for the small voice
+  config right after a ~63 MB voice download; the boot-time provisioning
+  run "finished" with onnx-only directories, and `start.sh`'s
+  directory-is-non-empty check silently accepted the incomplete state.
+- **Resolution (ADR-0015):** `download_tts_voices.py` retries transient
+  failures (5 attempts, 5→60 s backoff) and gained `--verify` (exit 0 only
+  when every voice has BOTH files); `start.sh` verify-gates the boot and
+  (re-)provisions any incomplete state; the app logs a `TTS PROVISIONING
+  WARNING` at startup and `/health.tts.warning` flags the same condition.
+- **Verification:** all 6 voice files present (ur/en/es onnx+json);
+  `/health` reports `tts.languages=["en","es","ur"]` with no warning;
+  live probe: guest receives 110,592 B synthesized PCM for a host Urdu
+  utterance, zero self-audio on the host; solo fallback intact.
+
+---
+
+## KI-020 — RESOLVED (QA round, BUG-002): ghost seat blocked rejoin for ~180 s after an unclean drop
+
+- **Description (QA Journal):** after a tab crash / killed mobile browser
+  (no close frame reaches the server — the preview proxy does not
+  propagate client-side closes), the departed participant kept its seat
+  until the 180 s idle timeout; rejoining with the same code answered a
+  FATAL `room_full` and the app stopped reconnecting.
+- **Root cause:** disconnect detection relied solely on the server-side
+  socket state, which the proxy keeps alive after the client is gone.
+- **Resolution (ADR-0015):** the server tracks the last RECEIVED frame per
+  connection; a rejoin that finds its own seat held by a member silent for
+  `ROOM_STALE_SEAT_SECONDS` (12 s default) evicts the ghost (fatal
+  `seat_taken` + server-side close + honest `peer left` to the peer) and
+  takes the seat. Live occupants are never evicted (fatal `room_full`
+  unchanged). Client: 4 s heartbeat (pong deadline armed once per
+  unanswered ping), `room_full` retried during reconnects (≤90 s) instead
+  of dying, `seat_taken` added to the always-fatal codes.
+- **Verification:** backend suite + 4 new eviction tests (ghost evicted,
+  live seat protected, guest variant, ghost-cleanup regression guard);
+  live probe: rejoin succeeds after 13 s silence with left→joined events.
+
+---
+
+## KI-021 — MITIGATED (QA round, BUG-003): the preview proxy does not forward WebSocket close frames
+
+- **Description (QA Journal):** server-initiated closes after fatal
+  protocol errors (e.g. `room_not_found`) never reach the client through
+  the preview proxy (locally the close arrives immediately with code 1008).
+  The same gap causes KI-020's ghost seats.
+- **Root cause:** platform preview proxy limitation — not fixable in the
+  application.
+- **Mitigation (ADR-0015):** the app layer is correct on both ends (server
+  closes + tears down on every fatal path; the reference client closes its
+  own socket on room-fatal errors and its 10 s pong deadline reaps a
+  half-open socket within ≤14 s), so behavior is correct even when the
+  close frame is swallowed.
+- **Status:** MITIGATED — production reverse proxies forward close frames;
+  re-verify on the Phase 10 production deployment.

@@ -77,6 +77,35 @@ app still starts — STT/VAD keep working, translation passes through, and
 observability fix). Re-run the script and restart to recover full
 translation.
 
+### 4.2 TTS voices (Phase 4 — required for spoken translations)
+
+The `piper` TTS provider (default) discovers its voices by scanning
+`models/tts/<language>/` at startup. **This directory is a git-ignored
+runtime artifact — a fresh checkout has zero voices**, and without
+provisioning every translated sentence stays text-only with a visible
+`tts_unsupported_language` chip. Provision all three (~190 MB total):
+
+```bash
+cd backend
+uv run python scripts/download_tts_voices.py
+# subset: uv run python scripts/download_tts_voices.py --only ur,en
+```
+
+| Language | Voice (rhasspy/piper-voices) | Footprint |
+| --- | --- | --- |
+| `ur` | ur_PK-fasih-medium | ~65 MB |
+| `en` | en_US-lessac-medium | ~63 MB |
+| `es` | es_MX-ald-medium | ~63 MB |
+
+The script is **idempotent** and is run automatically by `start.sh` on first
+boot when `models/tts/` is empty (`TTS_PROVIDER=piper`, the default). If
+that automatic provisioning fails (e.g. no network), `start.sh` logs a loud
+ERROR and the app still starts — STT/translation keep working, and `/health`
+makes the gap visible: `tts.languages: []`. Re-run the script and restart to
+recover spoken output. Voices are loaded lazily per language: the FIRST
+translation into a language pays ~1.5 s of voice load (measured), later ones
+synthesize at RTF ≈ 0.06–0.08.
+
 ## 5. Environment variables (backend)
 
 All in `backend/.env.example`; highlights:
@@ -105,6 +134,14 @@ All in `backend/.env.example`; highlights:
 | `TRANSLATION_PROVIDER` | `local` | `local` / `fake` / `libre` / `none` (Phase 3) |
 | `TRANSLATION_DETECT_MODE` | `auto` | `auto` or `pinned` (ADR-0012) |
 | `TRANSLATION_MODELS_DIR` | `models/translation` | offline MT pair scan root |
+| `TTS_PROVIDER` | `piper` | `piper` / `fake` / `none` (Phase 4, ADR-0013) |
+| `TTS_VOICES_DIR` | `models/tts` | offline voice scan root (`<lang>/*.onnx`) |
+| `TTS_TIMEOUT_S` | `10` | synthesis hard cap |
+| `TTS_RATE_LIMIT_PER_MINUTE` | `30` | sliding-window synthesis cap |
+| `TTS_MAX_CONCURRENT` | `1` | synthesis is CPU-bound |
+| `TTS_MAX_TEXT_CHARS` | `800` | longer texts are not spoken (text kept) |
+| `ROOM_LINGER_SECONDS` | `120` | Phase 5: how long an empty room survives for reconnection (ADR-0014) |
+| `TTS_WORKER_THREADS` | `1` | synthesis executor size |
 | `HF_HOME` | *(set by start.sh)* | keeps model cache inside the project |
 | `HF_ENDPOINT` | *(unset)* | mirror for filtered networks |
 
