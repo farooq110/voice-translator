@@ -86,9 +86,83 @@ fixes local to the Phase 2 code.
 | QA-06 | Re-verification: backend 69 passed + 1 xfail; frontend tsc/lint/41 tests/build clean; live E2E 3/3 + silence guard PASS + continuous speech 5/5 (first text 6.28 s); docs: ADR-0011, protocol spec, testing.md, KI-010/011, CHANGELOG 0.2.2, APP_VERSION 0.2.2 | DONE |
 | QA-07 | OBS-005 remainder (WS origin allow-listing, authentication) — stays Phase 10 per the audit and docs | DEFERRED (Phase 10) |
 
-## Phase 3+ — see `prompt.md` section 17
+## Phase 3 — Translation Decision Engine and Bidirectional Translation — COMPLETE
 
-Translation decision engine (P3), TTS + playback (P4), two-person MVP (P5),
-mobile compatibility (P6), Zoom (P7), extension (P8), more apps (P9),
-production (P10). All `TODO` and **blocked until the respective phase is
-approved**.
+Approval: user message "After that start the phase 3 and complete it"
+(2026-11-01) — explicit approval per master prompt §23.
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P3-01 | Decision engine (pure, ADR-0012): master prompt Rules 1–4 for any pair — native→preferred, preferred→native, third-language pass-through with NO provider call, identical-config, low-confidence/undetected/unsupported/too-long honest pass-throughs; 17 unit tests | DONE |
+| P3-02 | Detection architecture "detect-first, pin-the-decode": standalone `detect_language` pass (measured: en 0.997 / es 0.989 / ur→hi 0.775 = KI-002) + ur/hi cluster + 0.60 threshold + native fallback; ONE decode pinned to the resolved language (never auto-decoded — auto measured unusable: `ar` p=0.97, mixed scripts, 3–4× slower); 8 s detection cap (greeting-prefix finding) | DONE |
+| P3-03 | Provider abstraction + 3 implementations: `local` CT2 OPUS-MT (ur↔en + es↔en offline, download script, measured EOS framing fix), `fake` (deterministic), `libre` (httpx + MockTransport-tested); keyless web providers probed and rejected (MyMemory quota / Google bot-wall / argos 404 / ct2fast 401) — documented | DONE |
+| P3-04 | Protocol v1 additive: `transcription.decision` (action/reason/source/target/detection), `translation` event, 3 utterance-scoped non-fatal error codes (`translation_failed/timeout/rate_limited`); client tolerates `decision: null` | DONE |
+| P3-05 | Bounded execution: dedicated worker thread, sliding-window rate limit 30/min, ≤2 concurrent, 8 s timeout, stale-drop on close + task cancellation, text cap 2000 chars; Unicode/RTL never rewritten | DONE |
+| P3-06 | Frontend: `VITE_FEATURE_TRANSLATION` flag, per-line direction badge / pass-through chips, RTL-aware translated text, per-line error chips; immutable update-by-id (`services/translations.ts`); protocol parser (null-tolerant) + 10 service tests + 7 parser tests | DONE |
+| P3-07 | Verification: backend **128 passed + 1 xfail** (incl. `translation_real` — real ur→en/en→ur through CT2 models); frontend tsc/lint/**57 tests**/build clean; live `e2e_translation_check.py` **3/3** (Rules 1–3 with real MT); continuous speech **5/5 ≤ 4.0 s** with the detect pass; synthetic 3/3; silence guard PASS; browser smoke **10/10** | DONE |
+| P3-08 | Docs: ADR-0012; protocol spec §3a; testing.md §2/§3/§10; .env.example; README (status/architecture/limitations); KI-002 update + KI-012; DECISIONS D-014; CHANGELOG 0.3.0; CURRENT_STATE; APP_VERSION 0.3.0 | DONE |
+
+## Phase 4 — Text-to-Speech and Browser Audio Playback — COMPLETE (pending approval)
+
+Approval: user message "start pahse 4 and complete it" (2026-11-04) —
+explicit approval per master prompt §23.
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P4-01 | TTS engine evaluation + decision: Piper (offline VITS on onnxruntime — already shipped for faster-whisper; no torch/keys/GPU); voices ur_PK-fasih / en_US-lessac / es_MX-ald (22 050 Hz) measured RTF 0.06–0.08 on 2 vCPU | DONE |
+| P4-02 | TTSProvider abstraction (`app/tts/base.py`) + `piper_local.py` (lazy per-language load, discovery) + `fake.py` (deterministic sine, seeded) + `none`; bounded `TTSService` (30/min sliding window, ≤1 concurrent, 10 s timeout, 800-char cap, dedicated executor) — 12 service tests | DONE |
+| P4-03 | Protocol v1 additive: `audio` metadata event + exactly one binary PCM16 frame (metadata+binary under one send lock); 5 utterance-scoped non-fatal codes (`tts_failed/timeout/rate_limited/unsupported_language/text_too_long`); synthesis task tracking + cancellation on disconnect; pass-through NEVER reaches TTS (asserted) | DONE |
+| P4-04 | Frontend: wsClient audio⇄binary pairing (stray-frame counter, stale-meta clear), SpeechPlayer (sequential Web Audio scheduling — overlap impossible, bounded queue w/ oldest-drop + re-base after cancel, mute cancels, autoplay unlock on mic gesture, stop-all), "Spoken translations" toggle (persisted), speaking chip + voice-error chips + stop-voice button | DONE |
+| P4-05 | Ops: `scripts/download_tts_voices.py` (idempotent, ~190 MB), `start.sh` provisioning step (loud failure), `/health` `tts` section (provider/languages/voices/bounds) | DONE |
+| P4-06 | Verification: backend **155 passed + 1 xfailed** (+25 tests, incl. `tts_real` real synthesis); frontend **81/81** + tsc + ESLint + build 254.5 kB; live `e2e_tts_check.py` **3/3** (real speech → real MT → real synthesis, RMS-checked; es pass-through → ZERO audio frames); translation E2E 3/3 + silence guard PASS + browser smoke 10/10 (zero console errors) | DONE |
+| P4-07 | Docs: ADR-0013; protocol spec §3b + error table; architecture.md (diagram, threading, language path, testing); deployment.md §4.2 + env vars; testing.md §11; README (status/diagram/limitations/roadmap); prompt.md (Phase 4 record); DECISIONS D-015; CHANGELOG 0.4.0; CURRENT_STATE; APP_VERSION 0.4.0 | DONE |
+
+## Phase 5 — Complete Browser MVP (Two Participants) — COMPLETE (pending approval)
+
+Approval: user message "start phase 5 and complete it" (2026-11-04) —
+explicit approval per master prompt §23.
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P5-01 | Room model (ADR-0014): `app/ws/rooms.py` Room + RoomManager (6-char unambiguous invite codes, in-memory, 120 s linger + rejoin, `ROOM_LINGER_SECONDS`), room-aware hello (host creates/rejoins, guest joins configuring nothing), `peer` joined/left events, fatal `room_required`/`room_not_found`/`room_full`/`missing_languages`, leave/linger cleanup, `/health rooms` — 16 WS room tests (scenarios 1–11 with fakes) | DONE |
+| P5-02 | Routing: transcripts + translations broadcast to both members with `speaker` tags; synthesized audio ONLY to the other participant (solo fallback = exact Phase 1–4 shape); translation failures shared, TTS failures to the audio's recipients, STT errors speaker-local; pass-through relay of the ORIGINAL captured audio (16 kHz, never TTS, never replayed to the speaker); guest decoded against the host's pair | DONE |
+| P5-03 | Protocol v1 additive: optional `role`/`room` in hello + optional language fields (validated), `speaker` on transcription/translation/audio/error, `RelayEvent` + binary pairing, null fields omitted (absent ≡ null, documented); frontend protocol parser extended | DONE |
+| P5-04 | Frontend: invite-link flow (`?room=CODE`), guest view with NO language panel + host's pair, host invite panel (code + copy link + peer status), speaker-aware transcript keyed (speaker, id) with Guest/Host chips, wsClient relay pairing, room-fatal errors stop reconnect, host rejoin via stored code | DONE |
+| P5-05 | Feedback-loop prevention (scenario 12): server never re-ingests output audio (asserted) + client `PlaybackGuard` dropping uplink while REMOTE audio plays (+300 ms tail; own-utterance TTS never arms it) — 6 unit tests | DONE |
+| P5-06 | Verification: backend **171 passed + 1 xfailed**; frontend **101/101** + tsc + ESLint + build; live `e2e_phase5_check.py` **4/4** (two real connections, real STT/MT/Piper: routed voice only to the listener, relay without TTS, same-language both ways); translation E2E 3/3 + silence guard PASS; `smoke_phase5.mjs` **12/12** (invite-link join, guest sees no settings, both record, zero console errors); `smoke_phase2.mjs` 10/10 | DONE |
+| P5-07 | Docs: ADR-0014; README (status/diagram/limitations/roadmap); protocol spec (rooms/peer/relay/speaker + error table); architecture.md; testing.md §12; deployment.md (ROOM_LINGER_SECONDS); prompt.md (Phase 5 record); DECISIONS D-016; KNOWN_ISSUES KI-016/017/018; CHANGELOG 0.5.0; CURRENT_STATE; APP_VERSION 0.5.0; branch-local PHASE-5.md (phase-5 branch only) | DONE |
+
+## Phase 5 QA round — Deployment hardening — COMPLETE (pending approval)
+
+Input: independent QA verification report (Journal, 2026-11-05) — verdict
+"NOT ACCEPTED yet", blockers BUG-001/BUG-002, advisory BUG-003.
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P5-QA-1 | BUG-001: TTS provisioning integrity — `download_tts_voices.py` retry/backoff for HF 429 + `--verify` (all voices complete or exit 1); `start.sh` verify-gates the boot; startup `TTS PROVISIONING WARNING` log + additive `/health.tts.warning`; voices re-provisioned live (ur/en/es onnx+json) | DONE |
+| P5-QA-2 | BUG-002: stale-seat eviction — `last_seen` per connection refreshed on every received frame; rejoin evicts its own seat's ghost after `ROOM_STALE_SEAT_SECONDS` (12 s) with fatal `seat_taken` + server-side close + honest `peer left`; `leave_room()` identity guard (an evicted ghost can never eject the returning member); live occupants keep fatal `room_full` | DONE |
+| P5-QA-3 | BUG-002 client side: 4 s heartbeat (pong deadline armed once per unanswered ping), `room_full` retried during RECONNECT ≤90 s with honest banner (first-join room_full stays fatal), `seat_taken` added to fatal codes | DONE |
+| P5-QA-4 | BUG-003: app-layer verified on both ends (server closes on every fatal path — confirmed locally; client closes on room-fatal errors; half-open sockets reaped ≤14 s by the pong timeout); proxy close-frame gap documented (KI-021) for the production deployment | DONE |
+| P5-QA-5 | Verification: backend suite green (+6 tests: eviction host/guest, live-seat guard, cleanup regression, health warnings ×2); frontend 101/101 + tsc + build; live probe 5/5 (TTS delivery to the opposite participant only 110,592 B PCM, zero self-audio, solo fallback, ghost reclaim after 13 s, live-seat room_full, fatal close); `/health` v0.5.1 shows `tts.languages=[en,es,ur]` | DONE |
+| P5-QA-6 | Docs: ADR-0015; protocol spec (eviction + `seat_taken` + heartbeat + retry semantics); DECISIONS D-017; KNOWN_ISSUES KI-019/020/021; CHANGELOG 0.5.1; CURRENT_STATE; APP_VERSION 0.5.1; PHASE-5.md QA-round section (phase-5 branch) | DONE |
+
+## Phase 6 — Mobile/browser compatibility — COMPLETE (pending approval)
+
+Approval: user message "start phase 6 and complete it" (2026-11-06) —
+explicit approval per master prompt §23 (it also closes the Phase 5
+approval record).
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P6-01 | Honest capture lifecycle (ADR-0016): `visibilitychange → hidden` finalizes the recording exactly like a connection loss (capture stopped, buffer flushed, playback + PlaybackGuard cleared) with a plain-language banner; `pagehide` finalizes quietly; `startMicCapture` gains a `statechange` watchdog (`onStateLost`) for iOS `interrupted`/suspension, disarmed on stop; return-to-tab re-arms playback via `SpeechPlayer.resumeIfCreated()` (never creates an AudioContext) | DONE |
+| P6-02 | Screen Wake Lock (`services/wakeLock.ts`, injectable + unit-tested): acquire on recording start, release on finalize, OS-dropped sentinels forgotten, denials (low-power mode) degrade silently | DONE |
+| P6-03 | Coarse platform telemetry: protocol v1 additive optional `hello.config.client.platform` (lowercase tag ≤ 24 chars, never a raw UA); `Session.platform` + `/health sessions.by_platform` aggregation; 7 params validation tests + 2 aggregation tests; older clients unaffected | DONE |
+| P6-04 | Mobile comfort: PWA manifest + generated 192/512 icons + apple metas; `overscroll-behavior-y: none` (no pull-to-refresh reload mid-recording); 16 px form controls (no iOS focus zoom); sticky capture panel on small screens; ≥ 44 px touch targets; stale phase copy in index.html/footer refreshed; frontend version 0.6.0 | DONE |
+| P6-05 | Verification: backend **177 passed + 1 xfailed** (+7); frontend **123/123** (+9: platform mapping, WakeLock incl. OS-drop/deny, resumeIfCreated) + tsc + ESLint + build; `smoke_phase6.mjs` under FULL iPhone emulation **8/8** (incl. platform tag end-to-end + background-tab guard); regressions smoke_phase2 **10/10**, smoke_phase5 **12/12**; live E2E translation **3/3**, two-participant **4/4**, silence guard **PASS** | DONE |
+| P6-06 | Human real-device matrix written into `docs/testing.md §13b` (Android Chrome ×7, iPhone Safari ×7 incl. call/Siri interruption, lock screen, silent switch, low-power mode; two-phone room ×4) — the sandbox has no hardware; no claims made until it runs (KI-004/015/018) | DONE (matrix ready; hardware run is human) |
+| P6-07 | Docs: ADR-0016; protocol spec (hello.client + mobile lifecycle obligations §6); testing.md §13; README (status/limitations/roadmap); prompt.md → Phase 6 record; DECISIONS D-018; KNOWN_ISSUES KI-004/015/018 updated; CHANGELOG 0.6.0; CURRENT_STATE; APP_VERSION 0.6.0 | DONE |
+
+## Phase 7+ — see `prompt.md` section 17
+
+Zoom (P7), extension (P8), more apps (P9), production (P10). All `TODO`
+and **blocked until the respective phase is approved**.

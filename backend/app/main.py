@@ -26,10 +26,13 @@ from .logging_config import configure_logging
 from .sessions.manager import SessionManager
 from .stt import build_stt_provider
 from .stt.base import STTProvider
+from .translation import TranslationService, build_translation_service
+from .tts import TTSService, build_tts_service
 from .ws.audio_ws import router as audio_router
 from .ws.backpressure import SttQueue
+from .ws.rooms import RoomManager
 
-APP_VERSION = "0.2.2"
+APP_VERSION = "0.6.0"
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -40,11 +43,14 @@ def create_app(
     settings: Settings | None = None,
     stt: STTProvider | None = None,
     vad: UtterancePlanner | None = None,
+    translator: TranslationService | None = None,
+    tts: TTSService | None = None,
 ) -> FastAPI:
     settings = settings or get_settings()
     configure_logging(settings.log_level)
 
     sessions = SessionManager(max_sessions=settings.max_sessions)
+    rooms = RoomManager(linger_seconds=settings.room_linger_seconds)
     provider = stt if stt is not None else build_stt_provider(settings)
     vad_pipeline: UtterancePlanner = vad if vad is not None else SileroVAD(
         enabled=settings.vad_gate_enabled,
@@ -55,6 +61,8 @@ def create_app(
         split_max_seconds=settings.vad_split_max_seconds,
     )
     stt_queue = SttQueue(max_queued=settings.stt_max_queue_depth)
+    translation = translator if translator is not None else build_translation_service(settings)
+    tts_service = tts if tts is not None else build_tts_service(settings)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -66,6 +74,9 @@ def create_app(
         app.state.vad = vad_pipeline
         app.state.stt_queue = stt_queue
         app.state.sessions = sessions
+        app.state.rooms = rooms
+        app.state.translator = translation
+        app.state.tts = tts_service
         # The WS endpoint reads settings from app.state so that injected
         # settings (tests) take effect — get_settings() alone would bypass
         # them (and is cached).
@@ -79,10 +90,27 @@ def create_app(
         if vad_pipeline.enabled:
             vad_warmup = asyncio.create_task(asyncio.to_thread(vad_pipeline.ensure_loaded))
             app.state.vad_warmup = vad_warmup
+        translation_warmup = asyncio.create_task(asyncio.to_thread(translation.warmup))
+        app.state.translation_warmup = translation_warmup
+        tts_warmup = asyncio.create_task(asyncio.to_thread(tts_service.warmup))
+        app.state.tts_warmup = tts_warmup
+        # QA round (BUG-001): a deployment without voice models must be
+        # visible immediately in the logs — not discovered as silent
+        # translations mid-call. /health exposes the same gap as tts.warning.
+        tts_desc = tts_service.describe()
+        if tts_desc.get("enabled") and not tts_desc.get("languages"):
+            logger.error(
+                "TTS PROVISIONING WARNING: provider=%s enabled but NO voice models "
+                "loaded — translated audio stays text-only (recipients see "
+                "tts_unsupported_language). Provision voices under '%s' with "
+                "backend/scripts/download_tts_voices.py, then restart.",
+                settings.tts_provider, settings.tts_voices_dir,
+            )
         logger.info(
-            "app started version=%s env=%s stt=%s model=%s device=%s vad=%s",
+            "app started version=%s env=%s stt=%s model=%s device=%s vad=%s translation=%s tts=%s rooms_linger_s=%.0f",
             APP_VERSION, settings.app_env, provider.name, settings.stt_model,
-            settings.stt_device, vad_pipeline.describe(),
+            settings.stt_device, vad_pipeline.describe(), translation.describe(),
+            tts_service.describe(), settings.room_linger_seconds,
         )
         try:
             yield
@@ -90,13 +118,17 @@ def create_app(
             warmup.cancel()
             if vad_pipeline.enabled:
                 app.state.vad_warmup.cancel()
+            translation_warmup.cancel()
+            tts_warmup.cancel()
+            translation.aclose()
+            tts_service.aclose()
             executor.shutdown(wait=False, cancel_futures=True)
             logger.info("app stopped")
 
     app = FastAPI(
         title="AI Voice Translator",
         version=APP_VERSION,
-        summary="Real-time voice translation — Phase 2: VAD + audio optimization",
+        summary="Real-time voice translation — Phase 5: complete browser MVP (two participants)",
         lifespan=lifespan,
     )
 

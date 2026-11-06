@@ -4,7 +4,7 @@
 
 - Python ≥ 3.11,<3.13 with [uv](https://docs.astral.sh/uv/)
 - Node ≥ 20 (LTS) with npm
-- ~1.2 GB disk (deps + Whisper `small` model), no GPU required
+- ~2 GB disk (deps + Whisper `small` + Phase 3 offline MT models), no GPU required
 
 ## 2. Single-port production mode (recommended; also the platform default)
 
@@ -14,9 +14,10 @@ bash start.sh            # serves everything on :3000 (override with PORT=…)
 
 `start.sh` idempotently: stops a previous instance → `uv sync` if the venv is
 missing → builds the frontend if `frontend/dist` is missing → exports
-`HF_HOME=<project>/models/huggingface` → starts uvicorn → waits for
-`/health` → supervises the process. Logs land in `.zscripts/dev.log` when
-started via the platform shim.
+`HF_HOME=<project>/models/huggingface` → **provisions the offline MT
+translation models if `models/translation/` is empty (Phase 3, BUG-003 — see
+§4)** → starts uvicorn → waits for `/health` → supervises the process. Logs
+land in `.zscripts/dev.log` when started via the platform shim.
 
 What you get on one origin/port:
 
@@ -47,6 +48,64 @@ The model also auto-downloads on first use (lazily, in the background).
 `STT_MODEL` selects the size (`tiny`|`base`|`small`). Default `small` —
 accuracy tier for low-resource languages like Urdu (ADR-0007).
 
+### 4.1 Translation models (Phase 3 — required for the local provider)
+
+The `local` translation provider (default) discovers its language pairs by
+scanning `models/translation/<src>-<tgt>/` at startup. **This directory is a
+git-ignored runtime artifact — a fresh checkout has zero pairs**, and without
+provisioning every translation decision honestly degrades to pass-through
+(`unsupported_pair`). Provision all four directions (~600 MB total):
+
+```bash
+cd backend
+uv run python scripts/download_translation_models.py
+# subset: uv run python scripts/download_translation_models.py --only ur-en,en-ur
+# Behind a filtered network: HF_ENDPOINT=https://hf-mirror.com uv run …
+```
+
+| Pair | Source repo | Footprint |
+| --- | --- | --- |
+| `ur-en` / `en-ur` | gaudi/opus-mt-*-ctranslate2 | ~100 MB each |
+| `es-en` / `en-es` | michaelfeil/ct2fast-opus-mt-*-es-en | ~100 MB each |
+
+The script is **idempotent** (present, non-empty files are skipped) and is
+run automatically by `start.sh` on first boot when `models/translation/` is
+empty (`TRANSLATION_PROVIDER=local`, the default). If that automatic
+provisioning fails (e.g. no network), `start.sh` logs a loud ERROR and the
+app still starts — STT/VAD keep working, translation passes through, and
+`/health` makes the gap visible: `translation.pairs: []` (BUG-003
+observability fix). Re-run the script and restart to recover full
+translation.
+
+### 4.2 TTS voices (Phase 4 — required for spoken translations)
+
+The `piper` TTS provider (default) discovers its voices by scanning
+`models/tts/<language>/` at startup. **This directory is a git-ignored
+runtime artifact — a fresh checkout has zero voices**, and without
+provisioning every translated sentence stays text-only with a visible
+`tts_unsupported_language` chip. Provision all three (~190 MB total):
+
+```bash
+cd backend
+uv run python scripts/download_tts_voices.py
+# subset: uv run python scripts/download_tts_voices.py --only ur,en
+```
+
+| Language | Voice (rhasspy/piper-voices) | Footprint |
+| --- | --- | --- |
+| `ur` | ur_PK-fasih-medium | ~65 MB |
+| `en` | en_US-lessac-medium | ~63 MB |
+| `es` | es_MX-ald-medium | ~63 MB |
+
+The script is **idempotent** and is run automatically by `start.sh` on first
+boot when `models/tts/` is empty (`TTS_PROVIDER=piper`, the default). If
+that automatic provisioning fails (e.g. no network), `start.sh` logs a loud
+ERROR and the app still starts — STT/translation keep working, and `/health`
+makes the gap visible: `tts.languages: []`. Re-run the script and restart to
+recover spoken output. Voices are loaded lazily per language: the FIRST
+translation into a language pays ~1.5 s of voice load (measured), later ones
+synthesize at RTF ≈ 0.06–0.08.
+
 ## 5. Environment variables (backend)
 
 All in `backend/.env.example`; highlights:
@@ -72,6 +131,17 @@ All in `backend/.env.example`; highlights:
 | `WS_IDLE_TIMEOUT_SECONDS` | `180` | zombie-connection reap |
 | `MAX_SESSIONS` | `50` | capacity guard |
 | `CORS_ORIGINS` | *(empty)* | empty = same-origin only (recommended) |
+| `TRANSLATION_PROVIDER` | `local` | `local` / `fake` / `libre` / `none` (Phase 3) |
+| `TRANSLATION_DETECT_MODE` | `auto` | `auto` or `pinned` (ADR-0012) |
+| `TRANSLATION_MODELS_DIR` | `models/translation` | offline MT pair scan root |
+| `TTS_PROVIDER` | `piper` | `piper` / `fake` / `none` (Phase 4, ADR-0013) |
+| `TTS_VOICES_DIR` | `models/tts` | offline voice scan root (`<lang>/*.onnx`) |
+| `TTS_TIMEOUT_S` | `10` | synthesis hard cap |
+| `TTS_RATE_LIMIT_PER_MINUTE` | `30` | sliding-window synthesis cap |
+| `TTS_MAX_CONCURRENT` | `1` | synthesis is CPU-bound |
+| `TTS_MAX_TEXT_CHARS` | `800` | longer texts are not spoken (text kept) |
+| `ROOM_LINGER_SECONDS` | `120` | Phase 5: how long an empty room survives for reconnection (ADR-0014) |
+| `TTS_WORKER_THREADS` | `1` | synthesis executor size |
 | `HF_HOME` | *(set by start.sh)* | keeps model cache inside the project |
 | `HF_ENDPOINT` | *(unset)* | mirror for filtered networks |
 
@@ -90,9 +160,14 @@ never persisted).
 Not yet implemented (deliberately later phases): authentication/authorization
 (Phase 10), per-session rate limiting beyond the admission caps (Phase 10),
 TLS termination (handled by the platform gateway in the sandbox; use a reverse
-proxy in self-hosted production), provider data-flow documentation beyond
-"audio/text never leaves the box in Phase 1/2" (true today — STT is local;
-translation/TTS providers arrive in Phases 3/4 and will be documented then).
+proxy in self-hosted production).
+
+Data flow (honest, per phase): STT (Whisper), VAD and the Phase 3 `local`
+translation provider are **fully on-box** — audio and transcript text never
+leave the machine. The optional `libre` cloud provider (off by default)
+sends **translated text only**, never audio, to the LibreTranslate instance
+you configure. TTS arrives in Phase 4 and will be documented when
+implemented.
 
 **Phase 1 is intended for private/LAN or sandbox deployment, not the public
 internet.**
@@ -102,6 +177,8 @@ internet.**
 | Symptom | Check |
 | --- | --- |
 | `/health` shows `stt.loaded: false` | first inference still loading/downloading; watch backend logs |
+| UI shows "pass-through · pair unavailable" on every utterance | `/health` → `translation.pairs` is `[]` or missing the pair — provision MT models (§4.1) and restart |
+| `translation.pairs: []` after restart | provisioning failed (check start.sh output); run `backend/scripts/download_translation_models.py` manually |
 | Model download fails | set `HF_ENDPOINT=https://hf-mirror.com`; verify disk space |
 | Port 3000 busy | `start.sh` auto-kills its previous PID (`.zscripts/dev.pid`); check for foreign processes |
 | Browser can't connect WS | must be same-origin or proxied (`/ws`); check `CORS_ORIGINS` if cross-origin |

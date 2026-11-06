@@ -162,7 +162,11 @@ def test_full_ws_pipeline_real_vad_and_stt() -> None:
     from app.main import create_app
 
     pcm, rate, _ = _read_wav(FIXTURES / "ur_greeting.wav")
-    app = create_app()
+    # Phase 1/2 semantics (pinned STT language) — this test covers the VAD +
+    # STT pipeline, not the Phase 3 decision engine.
+    from app.config import Settings
+
+    app = create_app(settings=Settings(translation_provider="none", tts_provider="none"))
     with TestClient(app) as client:
         with client.websocket_connect("/ws/audio") as ws:
             ws.send_json(HELLO_UR)

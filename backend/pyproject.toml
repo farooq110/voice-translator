@@ -10,6 +10,9 @@ dependencies = [
     "pydantic-settings>=2.4",
     "numpy>=1.26,<3",
     "faster-whisper>=1.1",
+    "sentencepiece>=0.2.2",
+    "huggingface-hub>=2.4.0",
+    "piper-tts>=1.8.0",
 ]
 
 [dependency-groups]
@@ -23,6 +26,8 @@ testpaths = ["tests"]
 addopts = "-q"
 markers = [
     "stt_real: requires the downloaded Whisper model and real audio fixtures (not mocked)",
+    "translation_real: requires the downloaded OPUS-MT CT2 models (real local translation, not mocked)",
+    "tts_real: requires the downloaded Piper voices (real local synthesis, not mocked)",
 ]
 filterwarnings = [
     "ignore::DeprecationWarning",

@@ -20,7 +20,7 @@ class Session:
     `max_utterance_seconds`), so memory cannot grow without bound.
     """
 
-    __slots__ = ("id", "created_at", "closed", "config", "utterances", "_buffer")
+    __slots__ = ("id", "created_at", "closed", "config", "utterances", "platform", "_buffer")
 
     def __init__(self, session_id: str) -> None:
         self.id = session_id
@@ -28,6 +28,8 @@ class Session:
         self.closed = False
         self.config: HelloConfig | None = None
         self.utterances = 0
+        # Phase 6: self-reported client platform tag (optional, observational).
+        self.platform: str | None = None
         self._buffer = bytearray()
 
     def append_audio(self, chunk: bytes) -> int:
@@ -74,6 +76,16 @@ class SessionManager:
         with self._lock:
             return len(self._sessions)
 
-    def stats(self) -> dict[str, int]:
+    def stats(self) -> dict[str, object]:
+        """Active/max counts plus a by-platform tally of connected clients
+        (Phase 6 observability for the real-device matrix, KI-004)."""
         with self._lock:
-            return {"active": len(self._sessions), "max": self._max}
+            by_platform: dict[str, int] = {}
+            for session in self._sessions.values():
+                if session.platform:
+                    by_platform[session.platform] = by_platform.get(session.platform, 0) + 1
+            return {
+                "active": len(self._sessions),
+                "max": self._max,
+                "by_platform": by_platform,
+            }

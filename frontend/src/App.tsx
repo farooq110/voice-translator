@@ -2,12 +2,14 @@ import { useMemo } from 'react'
 import { ConnectionBadge } from './components/ConnectionBadge'
 import { ErrorBanner } from './components/ErrorBanner'
 import { HandsFreeToggle } from './components/HandsFreeToggle'
+import { PlaybackToggle } from './components/PlaybackToggle'
 import { LanguageSelector } from './components/LanguageSelector'
 import { LevelMeter } from './components/LevelMeter'
 import { MicButton } from './components/MicButton'
+import { RoomPanel } from './components/RoomPanel'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { getLanguage } from './config/languages'
-import { HANDS_FREE_ENABLED } from './config/flags'
+import { HANDS_FREE_ENABLED, ROOMS_ENABLED } from './config/flags'
 import { useTranslatorSession } from './hooks/useTranslatorSession'
 import type { WsStatus } from './services/wsClient'
 
@@ -60,29 +62,35 @@ export default function App() {
       <main className="app__main">
         <ErrorBanner error={session.error} onDismiss={session.dismissError} />
 
-        <section className="panel" aria-label="Language settings">
-          <h2 className="panel__title">Your languages</h2>
-          <p className="panel__hint">
-            Only you configure these — the other person never needs to install or set up
-            anything.
-          </p>
-          <div className="fields">
-            <LanguageSelector
-              id="native-language"
-              label="Native language"
-              hint={native ? `You speak ${native.label}; its text shows here as detected.` : undefined}
-              value={session.nativeLanguage}
-              onChange={session.setNativeLanguage}
-            />
-            <LanguageSelector
-              id="preferred-language"
-              label="Preferred translation language"
-              hint={preferred ? `Your ${native?.label ?? ''} speech will be delivered as ${preferred.label}.` : undefined}
-              value={session.preferredLanguage}
-              onChange={session.setPreferredLanguage}
-            />
-          </div>
-        </section>
+        {ROOMS_ENABLED ? (
+          <RoomPanel room={session.room} isGuest={session.isGuest} peerConnected={session.peerConnected} />
+        ) : null}
+
+        {!session.isGuest ? (
+          <section className="panel" aria-label="Language settings">
+            <h2 className="panel__title">Your languages</h2>
+            <p className="panel__hint">
+              Only you configure these — the other person never needs to install or set up
+              anything.
+            </p>
+            <div className="fields">
+              <LanguageSelector
+                id="native-language"
+                label="Native language"
+                hint={native ? `You speak ${native.label}; its text shows here as detected.` : undefined}
+                value={session.nativeLanguage}
+                onChange={session.setNativeLanguage}
+              />
+              <LanguageSelector
+                id="preferred-language"
+                label="Preferred translation language"
+                hint={preferred ? `Your ${native?.label ?? ''} speech will be delivered as ${preferred.label}.` : undefined}
+                value={session.preferredLanguage}
+                onChange={session.setPreferredLanguage}
+              />
+            </div>
+          </section>
+        ) : null}
 
         <section className="panel capture-panel" aria-label="Speech capture">
           <div className="capture">
@@ -102,9 +110,21 @@ export default function App() {
           {HANDS_FREE_ENABLED ? (
             <HandsFreeToggle checked={session.handsFree} onChange={session.setHandsFree} />
           ) : null}
+          <PlaybackToggle checked={session.playbackEnabled} onChange={session.setPlaybackEnabled} />
+          {session.speakingId !== null ? (
+            <button type="button" className="stop-voice" onClick={session.stopPlayback}>
+              stop voice
+            </button>
+          ) : null}
         </section>
 
-        <TranscriptPanel entries={session.transcripts} onDelete={session.deleteTranscript} />
+        <TranscriptPanel
+          entries={session.transcripts}
+          onDelete={session.deleteTranscript}
+          speakingId={session.speakingId}
+          ownRole={session.role}
+          roomsEnabled={ROOMS_ENABLED}
+ />
 
         {session.sttInfo !== null ? (
           <p className="app__engine">
@@ -116,9 +136,9 @@ export default function App() {
 
       <footer className="app__footer">
         <p>
-          Phase 2 — live transcription with server-side voice detection. Translation into your
-          preferred language and spoken output arrive in later phases. Works best in Chrome, Edge
-          and Safari over HTTPS.
+          Two people, one shared invite link: your language is translated and spoken for the other
+          side, theirs for you, any third language is relayed as original audio — offline voices,
+          no keys, no cloud. On phones, keep this tab in the foreground while speaking.
         </p>
       </footer>
     </div>

@@ -19,6 +19,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.audio.vad import UtterancePlan
+from app.config import Settings
 from app.main import create_app
 from app.stt.base import STTProvider, TranscriptionResult
 
@@ -26,12 +27,31 @@ from app.stt.base import STTProvider, TranscriptionResult
 class FakeSTT(STTProvider):
     name = "fake-stt"
 
-    def __init__(self, *, empty_text: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        empty_text: bool = False,
+        language: str | None = None,
+        probability: float = 0.97,
+        detect_language: str | None = None,
+        detect_probability: float | None = None,
+    ) -> None:
         super().__init__(model_id="fake-model", device="cpu", low_confidence_threshold=0.60)
         self.calls = 0
         self.last_language_hint: str | None = None
         self.last_audio_bytes: bytes = b""
         self.empty_text = empty_text
+        # Auto-detect label (used when no hint is passed, ADR-0012) and the
+        # reported detection confidence — per-test configurable.
+        self.language = language
+        self.probability = float(probability)
+        # Standalone detect_language result (ADR-0012 v2); defaults to the
+        # decode label so tests configure ONE language per fixture.
+        self.detect_language = detect_language if detect_language is not None else language
+        self.detect_probability = (
+            detect_probability if detect_probability is not None else float(probability)
+        )
+        self.detect_calls = 0
 
     def ensure_loaded(self) -> None:
         return None
@@ -39,6 +59,16 @@ class FakeSTT(STTProvider):
     @property
     def loaded(self) -> bool:
         return True
+
+    def detect_pcm(
+        self,
+        pcm16: bytes,
+        *,
+        sample_rate: int,
+        channels: int = 1,
+    ) -> tuple[str | None, float]:
+        self.detect_calls += 1
+        return self.detect_language, self.detect_probability
 
     def transcribe_pcm(
         self,
@@ -54,10 +84,11 @@ class FakeSTT(STTProvider):
         duration = len(pcm16) / 2 / sample_rate
         return TranscriptionResult(
             # Mirrors the real provider: the configured hint is authoritative
-            # and is reported back as the result language.
+            # and is reported back as the result language. Without a hint
+            # (auto-detection path), the per-test `language` label applies.
             text="" if self.empty_text else f"fake transcription {self.calls}",
-            language=language_hint if language_hint else "en",
-            language_probability=0.97,
+            language=language_hint if language_hint else (self.language or "en"),
+            language_probability=self.probability,
             audio_duration_s=round(duration, 3),
         )
 
@@ -148,9 +179,17 @@ def fake_stt() -> FakeSTT:
     return FakeSTT()
 
 
+# Phase 1/2 semantics for the protocol tests: translation DISABLED (no
+# decisions, pinned STT hint). Phase 3 behavior is covered in
+# test_ws_translation.py / test_translation_*.py with explicit settings.
+NO_TRANSLATION_SETTINGS = Settings(translation_provider="none", tts_provider="none")
+
+
 @pytest.fixture()
 def client(fake_stt: FakeSTT) -> Iterator[TestClient]:
-    app = create_app(stt=fake_stt, vad=PassThroughVAD())
+    app = create_app(
+        stt=fake_stt, vad=PassThroughVAD(), settings=NO_TRANSLATION_SETTINGS
+    )
     with TestClient(app) as test_client:
         yield test_client
 
@@ -163,7 +202,9 @@ def empty_stt() -> FakeSTT:
 
 @pytest.fixture()
 def client_empty(empty_stt: FakeSTT) -> Iterator[TestClient]:
-    app = create_app(stt=empty_stt, vad=PassThroughVAD())
+    app = create_app(
+        stt=empty_stt, vad=PassThroughVAD(), settings=NO_TRANSLATION_SETTINGS
+    )
     with TestClient(app) as test_client:
         yield test_client
 

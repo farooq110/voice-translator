@@ -14,6 +14,9 @@ cd backend && uv run pytest -m "not stt_real"
 # Real-model STT tests (needs model + fixtures; skipped if absent)
 cd backend && HF_HOME=../models/huggingface uv run pytest -m stt_real
 
+# Real TTS tests (needs the provisioned Piper voices; skipped if absent)
+cd backend && uv run pytest -m tts_real
+
 # Everything
 cd backend && uv run pytest
 
@@ -36,14 +39,19 @@ cd backend && HF_HOME=../models/huggingface uv run python scripts/bench_stt.py
 # Phase 2 VAD pipeline benchmark (gate cost, silence rejection, trim, accuracy)
 cd backend && HF_HOME=../models/huggingface uv run python scripts/bench_vad.py
 
+# Phase 4 TTS E2E: real speech → real MT → real Piper synthesis → audio
+# frames over the real protocol (pass-through must bypass TTS)
+cd backend && uv run python scripts/e2e_tts_check.py
+
 # Phase 2 browser smoke (headless Chromium with Chrome's fake microphone;
 # screenshots land in docs/screenshots/phase2/)
 node frontend/scripts/smoke_phase2.mjs
 ```
 
-## 2. Backend test suite — actual result (2026-11-01, after ADR-0011)
+## 2. Backend test suite — actual result (2026-11-01, after ADR-0012)
 
-`uv run pytest` → **69 passed, 1 xfailed** in ~23 s (63 unit + 6 real-model).
+`uv run pytest` → **128 passed, 1 xfailed** in ~27–202 s (unit + real-model +
+real-MT; the spread is the real-translation class loading CT2 models).
 
 | Area | Tests | Notes |
 | --- | --- | --- |
@@ -56,6 +64,10 @@ node frontend/scripts/smoke_phase2.mjs
 | VAD real Silero (not mocked) | 5 | fixture detected+trimmed, silence gated, low-level noise gated, two bursts segmented, disabled = exact pass-through |
 | WS VAD + backpressure (fakes) | 8 | **gate rejects silence BEFORE STT (0 calls)**, **gate rejection echoes the client `utterance_id` (BUG-001)**, trim delivers shorter audio + honest duration, split joins texts in order, per-session `server_busy` (echoed id + **dropped-by-design wording + queue-depth hint**), global `server_busy` across sessions (echoed id + `queue 1/1`), slot released on STT failure, health exposes vad/queue |
 | Real-model STT (not mocked) | 6 + 1 xfail | see §4; new: **full WS pipeline — real Silero gate + real Whisper over `/ws/audio` (ur → Arabic script)** |
+| Translation decision engine (pure) | 17 | ADR-0012 v2: rules 1–3 + identical/low-confidence/undetected/unsupported/too-long, **detect resolution — measured KI-002 signature (`hi` p=0.775 → cluster → ur)**, fallback gating, regional subtags, Arabic stays third-language |
+| Translation providers | 11 | fake marker/failure/pairs, **LibreTranslate over `httpx.MockTransport` — real request/response semantics (200/400/5xx/429/malformed/network/api-key)**, local pair discovery, **`translation_real`: real ur→en + en→ur through the downloaded CT2 models (script-verified output)** |
+| Translation service (async) | 9 | ok/failed/timeout/rate-limited outcomes, sliding-window limiter, disabled service, describe() |
+| WS translation flow (fakes) | 12 | **decision on transcription + `translation` event round-trip (both directions)**, **third language passes through with ZERO provider calls**, low-confidence gating, identical config, **KI-002 cluster case at the WS level**, uncertain fallback pins native + gates, unsupported pair, provider failure → utterance-scoped non-fatal error, rate limit, disabled = no `decision` field, server-generated ids translated |
 
 The 1 xfail is **deliberate and documented**: Urdu language *label* detection
 **with automatic detection** (see KI-002). It is a tracked known issue, not a
@@ -70,12 +82,11 @@ bypassed per-app overrides in tests.
 
 - `tsc --noEmit` (strict, `noUncheckedIndexedAccess`) → clean.
 - `eslint . --max-warnings 0` → clean.
-- `vitest run` → **41 passed** (protocol parser 12 — incl. the BUG-001
-  `utterance_id` builder/parser cases, languages 5, WS client 10 — fake
-  WebSocket, fake timers, reconnect/backoff/heartbeat, uplink-stall chunk
-  dropping, **correlation id on flush**, flags 7, no-speech policy 2,
-  **flushTracker 5 — both QA mis-attribution modes**).
-- `vite build` → ✓ (`index.html` 1.2 kB, JS 244 kB / 77 kB gzip, CSS 6.5 kB).
+- `vitest run` → **57 passed** (protocol parser 19 — incl. the ADR-0012
+  decision/`translation`-event cases, languages 5, WS client 10, flags 7,
+  no-speech policy 2, flushTracker 5, **translations 10 — event/error
+  attribution by utterance id, badge text map, error-code policy**).
+- `vite build` → ✓ (`index.html` 1.2 kB, JS 248 kB / 78 kB gzip, CSS 6.9 kB).
 
 ## 4. Real STT validation — actual results (2026-10-31, after ADR-0007: model `small`, beam5, VAD)
 
@@ -313,3 +324,157 @@ Safari, background tab, lock screen, interruptions.
 - Multi-participant sessions, translation, TTS, meeting integrations — later
   phases by design.
 - No coverage % is claimed (not measured).
+
+## 10. Phase 3 — translation decision engine — actual results (2026-11-01, ADR-0012)
+
+**Design verified live: detect-first, pin-the-decode.** Whisper full
+auto-decode was measured UNUSABLE for Urdu (`ar` label p=0.97, mixed
+Arabic/Devanagari text, 3–4× slower); the standalone `detect_language` pass
+plus the ur/hi cluster + threshold resolution restores correctness while
+keeping every decode pinned (Phase 1/2 text quality and speed).
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Rule 1 — ur speech → en | **PASS** | decision `translate/native_language`, detection `cluster` (raw label `hi` p=0.78 — KI-002 resolved), translation 144 ms: "How's that okay today? Thank you very much." |
+| Rule 2 — en speech → ur | **PASS** | decision `translate/preferred_language` (whisper p=1.00), translation 172 ms: «خوش آمدید۔ تم آج کیسے کر رہے ہو؟ یہ حقیقی آواز کا امتحان ہے۔» |
+| Rule 3 — es pass-through | **PASS** | decision `passthrough/third_language` (whisper p=0.99), provider NOT called |
+| Standalone detector (measured) | — | en p=0.997 · es p=0.989 · ur→`hi` p=0.775 (full utterance) · ur greeting 2.5 s PREFIX→`ar` p=0.93 (why the cap is 8 s, not 2.5 s) |
+| MT termination fix (measured) | — | without source EOS: repetition loops; with the model's `</s>`: clean 3-token output — «موسم اچھا ہے» |
+| `e2e_translation_check.py` (live :3000) | **3/3 PASS** | real speech → real WS → real offline CT2 OPUS-MT |
+| Continuous speech + detection budget | **PASS** | 5/5 utterances, flush→text 3.72–3.90 s (gate ≤ 4.0 s) with the detect pass included |
+| Browser smoke after the translation UI | **10/10** | zero console/page errors |
+| Backend / frontend suites | **128+1xfail / 57** | §2/§3 |
+
+Honest MT quality note: the bundled OPUS-MT small models are everyday-sentence
+grade (KI-012) — the pipeline, decisions, limits and protocol are production
+paths; the provider is one setting away from a stronger engine.
+
+## 11. Phase 4 — TTS + browser audio playback — actual results (2026-11-04, ADR-0013)
+
+**Engine chosen (ADR-0013): Piper** — offline VITS voices on onnxruntime
+(already shipped for faster-whisper; no torch, no keys, no GPU). Provisioned
+voices: `ur_PK-fasih-medium`, `en_US-lessac-medium`, `es_MX-ald-medium`
+(22 050 Hz, under `models/tts/<lang>/`, ~190 MB total, git-ignored).
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Real synthesis probe (environment) | **PASS** | ur: 1.79 s audio in 0.10 s (RTF ≈ 0.06) · en: 2.09 s in 0.175 s · es: 2.98 s in 0.18 s; RMS ≈ 0.19 (audible), sr 22 050 |
+| `e2e_tts_check.py` (live :3000, v0.4.0) | **3/3 PASS** | Rule 1 ur→en: translation 109 ms + spoken en 2 577 ms audio, synthesis 1 573 ms (includes the first-use voice load), PCM RMS 0.191, binary frame = `bytes` · Rule 2 en→ur: 157 ms + spoken ur 3 424 ms audio in 546 ms, RMS 0.188 · Rule 3 es pass-through: ZERO audio frames (TTS bypassed) |
+| Backend suite | **155 passed + 1 xfailed** | +25 Phase 4 tests: TTS service bounds (timeout/rate/concurrency/unsupported/too-long), provider discovery, WS flow (audio+binary pairing, pass-through bypass, failure/unsupported/rate-limit error mapping, disabled shape), health exposure |
+| `tts_real` marked test | **PASS** | real ur/en/es synthesis through `PiperTTSProvider` (skips when voices absent) |
+| Frontend suite | **81/81 vitest**, typecheck clean, ESLint 0 | +24 Phase 4 tests: SpeechPlayer (sequential scheduling — overlap impossible, bounded queue w/ oldest-drop, re-basing after cancel, mute, autoplay resume), wsClient audio⇄binary pairing + stray-frame counter, `audio` event parsing (incl. rejects), voice-error chips |
+| Browser smoke (after the playback UI) | **10/10** | zero console/page errors |
+| Live regression: translation E2E + silence guard | **3/3 PASS · PASS** | Phase 3 paths unregressed |
+
+Bounded-resource guarantees (mirrors translation): 30 syntheses/min sliding
+window, ≤1 concurrent on a dedicated single-thread executor, 10 s hard
+timeout, 800-char text cap; every failure is a non-fatal utterance-scoped
+error and the translated text is never touched.
+
+Honest TTS quality note: Piper `medium` voices are comprehension-grade, not
+human-equivalent; the Urdu voice is a UAT-dataset model with eSpeak `ur`
+phonemization. Mixed-language Urdu sentences may render anglicisms with an
+Urdu accent. Provider abstraction = upgrade is a settings change.
+---
+
+## 12. Phase 5 — two-participant rooms + audio routing — actual results (2026-11-04, ADR-0014)
+
+All numbers below are from the live :3000 server (real Whisper `small`
+detection, real CTranslate2 OPUS-MT, real Piper voices, real binary PCM
+frames) unless marked otherwise.
+
+| Check | Result | Notes |
+| --- | --- | --- |
+| Backend suite | **171 passed + 1 xfailed** | +16 Phase 5 room tests (`test_ws_rooms.py`): create/join/presence, room codes, guest configures nothing, `room_full`/`room_not_found`/`room_required`, scenario 1+11 (host ur → guest en voice ONLY), scenario 2+11 (guest en → host ur voice ONLY), scenarios 3/4/10 (relay, no TTS anywhere), scenario 5 (same language both ways), scenario 6 (low confidence → passthrough), scenario 7 (confident third language), scenario 9 (failing provider → shared utterance error), scenario 8 (host drop → `peer left` → rejoin same code → routing resumes), linger + destroy (health shows 0 rooms), solo-room Phase 1–4 shape |
+| Frontend suite | **101/101 vitest**, tsc clean, ESLint 0, build clean | +20 Phase 5 tests: protocol parsing (peer/relay/room/speaker + solo tolerance + invalid rejection), wsClient relay pairing (independent from audio pairing, stray-frame counter), speaker-aware translation/voice-error matching (colliding ids), PlaybackGuard (window, queue extension, clear, non-finite duration) |
+| `e2e_phase5_check.py` (two REAL connections, live :3000) | **4/4 PASS** | S1 host ur_greeting → guest: transcript (speaker=host, lang=ur) + translation ur→en (160 ms) + REAL en voice 109 056 B @ 22 050 Hz RMS 0.185 (synth 1 677 ms incl. first-use voice load); host receives transcript+translation ONLY (ping-pong probe) · S2 guest en_hello → host: ur voice 161 792 B RMS 0.172 (synth 568 ms) · S3 host es_hola → guest: ORIGINAL relay 112 644 B @ 16 kHz RMS 0.091, decision `passthrough/third_language`, ZERO translation + ZERO tts on either side · S4 guest ur_greeting (scenario 5, same language both sides) → host en voice 121 856 B RMS 0.200 |
+| Routing honesty (scenario 11) | asserted per utterance | the speaker's stream carries transcript + translation ONLY — probed with a ping that must be answered by the next frame being the pong (any stray audio frame fails the E2E) |
+| Latency (live, 2 vCPU, real models) | flush→transcription ≈ 6.3–7.0 s per 6–7 s fixture utterance (detect pass + pinned decode, consistent with the Phase 3 budget), MT 143–173 ms, voice delivery to the listener 149–1 684 ms (first utterance into a language pays the documented ~1.5 s voice load, KI-014) | rooms add no measurable server latency (same pipeline; one extra broadcast send per event) |
+| Regression: translation E2E (Phase 3 paths) | **3/3 PASS** | Rules 1–3 unchanged |
+| Regression: silence guard | **PASS** | hallucination guard active |
+| `smoke_phase5.mjs` (two real pages, fake mic) | **12/12** | invite-link join, guest view has NO language settings and shows the host's pair (Urdu ↔ English), peer presence flips to connected on BOTH pages, both record + stop with only the honest `no_speech_detected` banner, screenshots captured, zero console/page errors |
+| Regression: `smoke_phase2.mjs` (solo) | **10/10** | the Phase 1–4 solo flow is unchanged (solo room keeps the exact wire shape) |
+
+**Scenario coverage vs master prompt §17 Phase 5:** 1 ✔ (S1), 2 ✔ (S2),
+3 ✔ (S3), 4 ✔ (symmetric relay path, unit-tested for the guest-speaker
+case), 5 ✔ (S4), 6 ✔ (unit + live detector), 7 ✔ (unit), 8 ✔ (unit
+rejoin/linger), 9 ✔ (unit, shared utterance errors), 10 ✔ (S3: zero TTS
+frames), 11 ✔ (S1/S2 ping-pong probes + unit asserts), 12 ✔
+(architectural: no server re-ingestion — asserted; client PlaybackGuard
+unit-tested; real-hardware acoustics remain Phase 6, KI-018).
+
+## 13. Phase 6 — mobile/browser compatibility — actual results (2026-11-06, ADR-0016)
+
+### 13a. What the sandbox verified (device emulation, real server)
+
+`frontend/scripts/smoke_phase6.mjs` runs the app under FULL iPhone
+emulation (390×844 viewport, touch, mobile Safari UA, Chrome fake mic)
+against the live :3000 server:
+
+| Check | Result |
+| --- | --- |
+| M1 renders under iPhone emulation | **8/8 PASS** — all checks |
+| M2 manifest linked + served (`short_name=Translator`), `viewport-fit=cover` meta | ✔ |
+| M3 no horizontal overflow at 390 px | ✔ (0 px) |
+| M4 WebSocket connects on emulated mobile | ✔ |
+| M5 self-reported platform tag end-to-end (`/health` → `sessions.by_platform = {"ios-safari": 1}`) | ✔ |
+| M6 mic starts from a TAP (touch event, status live) | ✔ |
+| M7 tap stops; only the honest `no_speech_detected` banner (fake-mic tone) | ✔ |
+| M8 backgrounding the tab mid-recording stops the capture with the honest banner (capture guard) | ✔ |
+
+Regressions: `smoke_phase2.mjs` **10/10** (solo flow), `smoke_phase5.mjs`
+**12/12** (two participants, guest page already mobile-sized). Backend
+suite green (+7 Phase 6 tests: optional/validated `client.platform`,
+`/health` by_platform aggregation ×2, session stats shape); frontend
+**123/123** (+9: platform mapping, WakeLock acquire/release/OS-drop/deny,
+`resumeIfCreated` never creates a context), tsc/ESLint/build clean.
+Live: translation E2E 3/3, two-participant E2E 4/4, silence guard PASS.
+
+### 13b. Real-device matrix — HUMAN run required (KI-004/KI-015/KI-018)
+
+The sandbox has no physical phone, no iOS, and no acoustic room. The
+matrix below is the Phase 6 deliverable for a human; run it top to bottom
+(~15 min). All that is needed: the deployed HTTPS URL, one Android phone
+(Chrome) and one iPhone (Safari), plus a second person or a second device
+for the room checks.
+
+**Setup (both phones):** open the URL → allow the microphone when asked →
+check the badge shows *Connected*.
+
+**A. Android Chrome**
+
+| # | Step | Expected |
+| --- | --- | --- |
+| A1 | Rotate the phone; open the app portrait and landscape | No horizontal scrolling; mic button always visible (sticky panel) |
+| A2 | Choose languages, tap the mic, speak one sentence | Transcript appears; status shows *Hands-free listening…* |
+| A3 | With the mic ON, press Home / switch apps for 10 s, come back | A banner says recording stopped because the tab was suspended; mic is OFF; no stuck *Transcribing…* |
+| A4 | Tap the mic again and speak | Recording restarts cleanly, transcript continues |
+| A5 | Play a translated clip (second device or solo fallback), then speak while it plays | Your own speech is ignored while the clip plays (feedback guard), then resumes |
+| A6 | Put the phone screen-off during a 30 s hands-free recording | Speech is still captured (wake lock) OR an honest stop appears — never silent fake "recording" |
+| A7 | Chrome → *Add to Home screen* → launch from the icon | Opens full-screen (standalone), mic works |
+
+**B. iPhone Safari**
+
+| # | Step | Expected |
+| --- | --- | --- |
+| B1 | Open the app, tap the mic, speak | Safari asks for mic permission once; transcript appears |
+| B2 | Tap a language `<select>` | Picker opens without the page zooming afterwards (16 px rule) |
+| B3 | With the mic ON, take a phone call / invoke Siri, then return | Banner: recording stopped (capture interrupted); tap mic to continue works |
+| B4 | With the mic ON, lock the screen 10 s, unlock | Same honest stop behavior as B3 (or wake lock kept capture alive) |
+| B5 | Toggle silent switch; receive a translated clip while ring switch is OFF | Clip is audible (Web Audio obeys the switch — note what you observed) |
+| B6 | Low Power Mode ON, tap mic | Recording either works or shows a clear reason — never a silent failure |
+| B7 | Share → *Add to Home Screen*, launch from icon | Full-screen app; mic works |
+
+**C. Two-phone room check (one Android host + one iPhone guest)**
+
+| # | Step | Expected |
+| --- | --- | --- |
+| C1 | Host creates the room, copies the invite link, sends it to the phone | Guest opens the link and sees NO language settings |
+| C2 | Both speak one sentence each (phone loudspeakers, ~50 cm apart) | Each side hears the OTHER's translated voice; nobody hears their own voice echoed |
+| C3 | Guest backgrounds the tab mid-room for ~15 s, returns | Guest rejoins automatically (stale-seat eviction) or retries visibly; host sees *peer left* then *joined* |
+| C4 | Speak OVER the other's audio on purpose | No runaway loop/echo (device AEC + uplink guard) — note the hardware quality |
+
+Run `curl -s https://<deployment>/health | jq .sessions.by_platform` after
+the matrix: the tags observed there (e.g. `android-chrome`, `ios-safari`)
+are the ground truth that real devices connected (ADR-0016 §3). Results of
+this matrix are to be recorded here when run.

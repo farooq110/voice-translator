@@ -135,3 +135,232 @@ describe('parseServerEvent', () => {
     ).toThrow(ProtocolError)
   })
 })
+
+describe('translation events (Phase 3, ADR-0012)', () => {
+  const TRANSLATION = {
+    v: 1,
+    type: 'translation',
+    id: 'c_0001_dead01',
+    text: 'Hello world',
+    source_language: 'ur',
+    target_language: 'en',
+    provider: 'local-opus-mt',
+    duration_ms: 312,
+  }
+
+  it('parses a translation event', () => {
+    const event = parseServerEvent(JSON.stringify(TRANSLATION))
+    if (event.type !== 'translation') throw new Error('expected translation event')
+    expect(event.provider).toBe('local-opus-mt')
+    expect(event.duration_ms).toBe(312)
+    expect(event.source_language).toBe('ur')
+    expect(event.target_language).toBe('en')
+  })
+
+  it('parses a transcription WITHOUT a decision as decision=undefined', () => {
+    const event = parseServerEvent(JSON.stringify(TRANSCRIPTION))
+    expect(event.type === 'transcription' && event.decision).toBeUndefined()
+  })
+
+  it('parses an optional translate decision', () => {
+    const event = parseServerEvent(
+      JSON.stringify({
+        ...TRANSCRIPTION,
+        decision: {
+          action: 'translate',
+          reason: 'native_language',
+          source_language: 'ur',
+          target_language: 'en',
+          detection: 'cluster',
+        },
+      }),
+    )
+    expect(
+      event.type === 'transcription' && event.decision?.target_language,
+    ).toBe('en')
+    expect(event.type === 'transcription' && event.decision?.detection).toBe('cluster')
+  })
+
+  it('parses an optional passthrough decision without target', () => {
+    const event = parseServerEvent(
+      JSON.stringify({
+        ...TRANSCRIPTION,
+        decision: {
+          action: 'passthrough',
+          reason: 'third_language',
+          source_language: 'es',
+          detection: 'whisper',
+        },
+      }),
+    )
+    expect(
+      event.type === 'transcription' && event.decision?.action,
+    ).toBe('passthrough')
+    expect(
+      event.type === 'transcription' && event.decision?.target_language,
+    ).toBeUndefined()
+  })
+
+  it('rejects invalid decision fields', () => {
+    expect(() =>
+      parseServerEvent(
+        JSON.stringify({
+          ...TRANSCRIPTION,
+          decision: { action: 'maybe', reason: 'native_language', source_language: 'ur', detection: 'whisper' },
+        }),
+      ),
+    ).toThrow(ProtocolError)
+    expect(() =>
+      parseServerEvent(
+        JSON.stringify({
+          ...TRANSCRIPTION,
+          decision: { action: 'translate', reason: 'nonsense', source_language: 'ur', target_language: 'en', detection: 'whisper' },
+        }),
+      ),
+    ).toThrow(ProtocolError)
+    expect(() =>
+      parseServerEvent(
+        JSON.stringify({
+          ...TRANSCRIPTION,
+          decision: { action: 'translate', reason: 'native_language', source_language: 'ur', target_language: 'en', detection: 'telepathy' },
+        }),
+      ),
+    ).toThrow(ProtocolError)
+  })
+
+  it('rejects translation events with bad fields', () => {
+    const missing = { ...TRANSLATION }
+    delete (missing as Record<string, unknown>)['target_language']
+    expect(() => parseServerEvent(JSON.stringify(missing))).toThrow(ProtocolError)
+    expect(() =>
+      parseServerEvent(JSON.stringify({ ...TRANSLATION, duration_ms: 'fast' })),
+    ).toThrow(ProtocolError)
+  })
+
+  it('parses an audio event (Phase 4, ADR-0013)', () => {
+    const event = parseServerEvent(
+      JSON.stringify({
+        v: 1, type: 'audio', id: 'c_0001', language: 'ur',
+        encoding: 'pcm_s16le', sample_rate: 22050, channels: 1,
+        bytes: 88200, duration_ms: 2000, synthesis_ms: 140, provider: 'piper',
+      }),
+    )
+    expect(event).toMatchObject({
+      type: 'audio', id: 'c_0001', language: 'ur', sample_rate: 22050, bytes: 88200,
+    })
+  })
+
+  it('rejects audio events with bad fields (Phase 4)', () => {
+    const base = {
+      v: 1, type: 'audio', id: 'c_0001', language: 'ur',
+      encoding: 'pcm_s16le', sample_rate: 22050, channels: 1,
+      bytes: 88200, duration_ms: 2000, synthesis_ms: 140, provider: 'piper',
+    }
+    expect(() => parseServerEvent(JSON.stringify({ ...base, encoding: 'mp3' }))).toThrow(ProtocolError)
+    expect(() => parseServerEvent(JSON.stringify({ ...base, channels: 2 }))).toThrow(ProtocolError)
+    const missing = { ...base }
+    delete (missing as Record<string, unknown>)['bytes']
+    expect(() => parseServerEvent(JSON.stringify(missing))).toThrow(ProtocolError)
+  })
+})
+
+describe('Phase 5 protocol additions (ADR-0014)', () => {
+  const ROOM = {
+    v: 1,
+    type: 'ready',
+    session_id: 's_room1',
+    audio: { encoding: 'pcm_s16le', sample_rate: 16000, channels: 1 },
+    stt: { provider: 'fake', model: 'm', device: 'cpu', loaded: true },
+    room: {
+      code: 'ABC234',
+      role: 'guest',
+      peers: 1,
+      native_language: 'ur',
+      preferred_language: 'en',
+    },
+  }
+
+  it('parses ready with room info (role, code, host languages)', () => {
+    const event = parseServerEvent(JSON.stringify(ROOM))
+    expect(event.type).toBe('ready')
+    expect(event).toMatchObject({
+      room: { code: 'ABC234', role: 'guest', peers: 1, native_language: 'ur' },
+    })
+  })
+
+  it('parses ready WITHOUT room (solo — the Phase 1–4 shape)', () => {
+    const solo = { ...ROOM } as Record<string, unknown>
+    delete solo['room']
+    const event = parseServerEvent(JSON.stringify(solo))
+    expect((event as { room?: unknown }).room).toBeUndefined()
+  })
+
+  it('parses peer joined/left events', () => {
+    const joined = parseServerEvent(
+      JSON.stringify({ v: 1, type: 'peer', event: 'joined', role: 'guest', peers: 1 }),
+    )
+    expect(joined).toMatchObject({ type: 'peer', event: 'joined', role: 'guest', peers: 1 })
+    const left = parseServerEvent(
+      JSON.stringify({ v: 1, type: 'peer', event: 'left', role: 'host', peers: 0 }),
+    )
+    expect(left).toMatchObject({ type: 'peer', event: 'left', role: 'host' })
+  })
+
+  it('rejects peer events with unknown role or event', () => {
+    expect(() =>
+      parseServerEvent(JSON.stringify({ v: 1, type: 'peer', event: 'joined', role: 'admin', peers: 1 })),
+    ).toThrow(ProtocolError)
+    expect(() =>
+      parseServerEvent(JSON.stringify({ v: 1, type: 'peer', event: 'exploded', role: 'host', peers: 1 })),
+    ).toThrow(ProtocolError)
+  })
+
+  it('parses a relay event with its speaker (original-audio pass-through)', () => {
+    const event = parseServerEvent(
+      JSON.stringify({
+        v: 1, type: 'relay', id: 'h_c_0001', speaker: 'host', language: 'es',
+        encoding: 'pcm_s16le', sample_rate: 16000, channels: 1,
+        bytes: 32000, duration_ms: 1000,
+      }),
+    )
+    expect(event).toMatchObject({ type: 'relay', speaker: 'host', sample_rate: 16000 })
+  })
+
+  it('parses speaker attribution on transcription/translation/audio/error', () => {
+    const tr = parseServerEvent(
+      JSON.stringify({
+        v: 1, type: 'transcription', id: 'c_0001', speaker: 'guest', text: 'hello',
+        language: 'en', language_probability: 0.99, audio_duration_s: 1,
+        processing_ms: 10, is_final: true, low_confidence: false,
+      }),
+    )
+    expect((tr as { speaker?: string }).speaker).toBe('guest')
+    const err = parseServerEvent(
+      JSON.stringify({ v: 1, type: 'error', code: 'tts_failed', message: 'x', fatal: false, speaker: 'host' }),
+    )
+    expect((err as { speaker?: string }).speaker).toBe('host')
+  })
+
+  it('tolerates absent speaker (solo mode — the Phase 1–4 shape)', () => {
+    const tr = parseServerEvent(
+      JSON.stringify({
+        v: 1, type: 'transcription', id: 'c_0001', text: 'hello',
+        language: 'en', language_probability: 0.99, audio_duration_s: 1,
+        processing_ms: 10, is_final: true, low_confidence: false,
+      }),
+    )
+    expect((tr as { speaker?: string }).speaker).toBeUndefined()
+  })
+
+  it('rejects an invalid speaker value', () => {
+    expect(() =>
+      parseServerEvent(
+        JSON.stringify({
+          v: 1, type: 'transcription', id: 'c_0001', speaker: 'admin', text: 'x',
+          language: 'en', language_probability: 0.99, audio_duration_s: 1,
+          processing_ms: 10, is_final: true, low_confidence: false,
+        }),
+      ),
+    ).toThrow(ProtocolError)
+  })
+})
