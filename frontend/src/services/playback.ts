@@ -68,6 +68,15 @@ export class SpeechPlayer {
     }
   }
 
+  /** Resume only when a context already exists — never create one (Phase 6:
+   * called when the page becomes visible again; autoplay policies may have
+   * suspended it while the tab was hidden). */
+  resumeIfCreated(): void {
+    if (this.context !== null && this.context.state === 'suspended') {
+      void this.context.resume()
+    }
+  }
+
   /** Mute/unmute. Turning mute ON cancels everything currently scheduled. */
   setEnabled(on: boolean): void {
     this.enabled = on

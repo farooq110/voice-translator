@@ -6,9 +6,10 @@ import { PlaybackToggle } from './components/PlaybackToggle'
 import { LanguageSelector } from './components/LanguageSelector'
 import { LevelMeter } from './components/LevelMeter'
 import { MicButton } from './components/MicButton'
+import { RoomPanel } from './components/RoomPanel'
 import { TranscriptPanel } from './components/TranscriptPanel'
 import { getLanguage } from './config/languages'
-import { HANDS_FREE_ENABLED } from './config/flags'
+import { HANDS_FREE_ENABLED, ROOMS_ENABLED } from './config/flags'
 import { useTranslatorSession } from './hooks/useTranslatorSession'
 import type { WsStatus } from './services/wsClient'
 
@@ -61,29 +62,35 @@ export default function App() {
       <main className="app__main">
         <ErrorBanner error={session.error} onDismiss={session.dismissError} />
 
-        <section className="panel" aria-label="Language settings">
-          <h2 className="panel__title">Your languages</h2>
-          <p className="panel__hint">
-            Only you configure these — the other person never needs to install or set up
-            anything.
-          </p>
-          <div className="fields">
-            <LanguageSelector
-              id="native-language"
-              label="Native language"
-              hint={native ? `You speak ${native.label}; its text shows here as detected.` : undefined}
-              value={session.nativeLanguage}
-              onChange={session.setNativeLanguage}
-            />
-            <LanguageSelector
-              id="preferred-language"
-              label="Preferred translation language"
-              hint={preferred ? `Your ${native?.label ?? ''} speech will be delivered as ${preferred.label}.` : undefined}
-              value={session.preferredLanguage}
-              onChange={session.setPreferredLanguage}
-            />
-          </div>
-        </section>
+        {ROOMS_ENABLED ? (
+          <RoomPanel room={session.room} isGuest={session.isGuest} peerConnected={session.peerConnected} />
+        ) : null}
+
+        {!session.isGuest ? (
+          <section className="panel" aria-label="Language settings">
+            <h2 className="panel__title">Your languages</h2>
+            <p className="panel__hint">
+              Only you configure these — the other person never needs to install or set up
+              anything.
+            </p>
+            <div className="fields">
+              <LanguageSelector
+                id="native-language"
+                label="Native language"
+                hint={native ? `You speak ${native.label}; its text shows here as detected.` : undefined}
+                value={session.nativeLanguage}
+                onChange={session.setNativeLanguage}
+              />
+              <LanguageSelector
+                id="preferred-language"
+                label="Preferred translation language"
+                hint={preferred ? `Your ${native?.label ?? ''} speech will be delivered as ${preferred.label}.` : undefined}
+                value={session.preferredLanguage}
+                onChange={session.setPreferredLanguage}
+              />
+            </div>
+          </section>
+        ) : null}
 
         <section className="panel capture-panel" aria-label="Speech capture">
           <div className="capture">
@@ -115,7 +122,9 @@ export default function App() {
           entries={session.transcripts}
           onDelete={session.deleteTranscript}
           speakingId={session.speakingId}
-        />
+          ownRole={session.role}
+          roomsEnabled={ROOMS_ENABLED}
+ />
 
         {session.sttInfo !== null ? (
           <p className="app__engine">
@@ -127,10 +136,9 @@ export default function App() {
 
       <footer className="app__footer">
         <p>
-          Phase 4 — live transcription with translation and spoken output: your language is
-          translated for the other side, theirs for you, any third language passes through
-          untouched, and translated sentences are read aloud (offline voices — pass-through
-          speech is never regenerated). Works best in Chrome, Edge and Safari over HTTPS.
+          Two people, one shared invite link: your language is translated and spoken for the other
+          side, theirs for you, any third language is relayed as original audio — offline voices,
+          no keys, no cloud. On phones, keep this tab in the foreground while speaking.
         </p>
       </footer>
     </div>

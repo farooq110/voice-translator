@@ -176,7 +176,7 @@ def test_third_language_passes_through_without_translation() -> None:
         tr = _receive_until(ws, "transcription")
         assert tr["decision"]["action"] == "passthrough"
         assert tr["decision"]["reason"] == "third_language"
-        assert tr["decision"]["target_language"] is None
+        assert tr["decision"].get("target_language") is None  # absent ≡ null
 
         ws.send_json({"v": 1, "type": "ping", "ts": 77})
         pong = ws.receive_json()

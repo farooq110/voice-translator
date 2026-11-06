@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import pytest
 from pydantic import ValidationError
 
@@ -29,6 +31,28 @@ def test_hello_parses() -> None:
     assert msg.config.native_language == "ur"
     assert msg.config.preferred_language == "en"
     assert msg.config.audio.sample_rate == 16000
+
+
+def test_hello_client_platform_optional() -> None:
+    """Phase 6 (KI-004): `client` is optional — older clients send nothing."""
+    msg = parse_client_message(VALID_HELLO)
+    assert msg.config.client is None
+
+    tagged = copy.deepcopy(VALID_HELLO)
+    tagged["config"]["client"] = {"platform": "ios-safari"}
+    msg = parse_client_message(tagged)
+    assert msg.config.client is not None
+    assert msg.config.client.platform == "ios-safari"
+
+
+@pytest.mark.parametrize(
+    "platform", ["a", "IOS Safari", "-ios", "ios-", "x" * 25, "ios_safari", "iOS-Safari"]
+)
+def test_hello_client_platform_validated(platform: str) -> None:
+    bad = copy.deepcopy(VALID_HELLO)
+    bad["config"]["client"] = {"platform": platform}
+    with pytest.raises(ValidationError):
+        parse_client_message(bad)
 
 
 def test_hello_wrong_version_rejected() -> None:
@@ -100,10 +124,17 @@ def test_event_serialization_shapes() -> None:
     err = ErrorEvent(code="x", message="y")
     assert err.model_dump() == {
         "type": "error", "v": 1, "code": "x", "message": "y",
-        "fatal": False, "utterance_id": None,
+        "fatal": False, "utterance_id": None, "speaker": None,
     }
     attributed = ErrorEvent(code="x", message="y", utterance_id="c_0001_ab12cd")
     assert attributed.utterance_id == "c_0001_ab12cd"
+    # Phase 5 (ADR-0014): cross-participant errors carry the speaker tag;
+    # wire serialization omits null fields (absent ≡ null, additive).
+    assert "speaker" not in err.model_dump_json(exclude_none=True)
+    assert (
+        ErrorEvent(code="x", message="y", speaker="guest").model_dump_json(exclude_none=True)
+        == '{"type":"error","v":1,"code":"x","message":"y","fatal":false,"speaker":"guest"}'
+    )
 
     tr = TranscriptionEvent(id="u_1", text="hi", language="en", language_probability=0.9,
                             audio_duration_s=1.0, processing_ms=5)

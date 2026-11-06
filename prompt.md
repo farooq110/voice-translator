@@ -1,177 +1,113 @@
-# prompt.md — Phase 4 Scope & Delivery Record
+# prompt.md — Phase 6 Scope & Delivery Record
 
-**Phase:** 4 of 10 — Text-to-Speech and Browser Audio Playback
+**Phase:** 6 of 10 — Mobile/browser compatibility on real devices
 **Status:** implemented — full verification round complete — **pending user approval** (§23 workflow)
-**Version:** v0.4.0
-**ADR:** [docs/decisions/0013-tts-offline-piper.md](docs/decisions/0013-tts-offline-piper.md)
+**Version:** v0.6.0
+**ADR:** [docs/decisions/0016-mobile-browser-compatibility.md](docs/decisions/0016-mobile-browser-compatibility.md)
 
 > This repository documents the **current phase only** in this file. The
 > complete master prompt (25 sections, 10-phase roadmap, approval workflow)
 > is maintained by the product owner outside the repository. The overall
 > delivery roadmap and phase statuses live in
 > [README.md § Roadmap](README.md#roadmap-master-prompt-17); durable agent
-> rules live in [AGENT.md](AGENT.md).
+> rules live in [AGENT.md](AGENT.md). Branch-local deep dives: `PHASE-3.md`
+> (phase-3 branch), `PHASE-4.md` (phase-4 branch), `PHASE-5.md` (phase-5
+> branch), `PHASE-6.md` (phase-6 branch) — each documents only its own
+> phase. (Previous phases' records live on in their branch docs and the
+> CHANGELOG; this file was the Phase 5 record until 2026-11-06.)
 
 ---
 
-## 1. Phase 4 scope (master prompt §17)
+## 1. Phase 6 scope (master prompt §17)
 
-Implement:
+Make the browser app behave correctly on real phones and modern mobile
+browsers — the phase the roadmap labels "Mobile/browser compatibility on
+real devices". Three known issues define the honest test surface:
 
-- TTS provider abstraction.
-- Urdu TTS evaluation and integration.
-- English TTS evaluation and integration.
-- Target-language speech generation.
-- Browser-compatible audio output.
-- Audio playback.
-- Playback queue management.
-- Prevention of overlapping audio.
-- Cancellation of outdated audio.
-- Provider failure handling.
+- **KI-004** — capture behavior on real devices: background tab, lock
+  screen, iOS interruptions.
+- **KI-015** — playback on real devices: autoplay policies, silent
+  switch, low-power mode.
+- **KI-018** — acoustic feedback on real hardware (loudspeaker→mic).
 
-**Original audio pass-through must bypass TTS.** Test actual generated
-audio (no mocked-only claims — AGENT.md § 6).
+The sandbox has no physical device, so Phase 6 delivers (a) every behavior
+that CODE controls and that CAN be verified here, and (b) the step-by-step
+human matrix for the hardware part — with no compatibility claims made
+from the sandbox (AGENT.md §6).
 
-## 2. Engine decision (ADR-0013)
+## 2. Design (ADR-0016)
 
-**Piper** — offline VITS voices on ONNX Runtime, which the backend already
-ships for faster-whisper: no torch, no API keys, no GPU, audio never leaves
-the machine. MIT-licensed voices provisioned under `models/tts/<lang>/`
-(git-ignored runtime artifact, idempotently provisioned by `start.sh`,
-~190 MB for the three languages). Measured on 2 vCPU: synthesis RTF
-≈ 0.06–0.08 warm; the FIRST synthesis into a language pays ~1.5 s of lazy
-voice load (documented trade-off).
+- **Honest capture lifecycle.** Mobile OSes suspend capture + timers when
+  a tab is backgrounded; the old code kept a fake "recording" state
+  streaming silence. Now: `visibilitychange → hidden` finalizes the
+  recording exactly like a connection loss (capture stopped, buffer
+  flushed, playback + feedback guard cleared) with a plain-language
+  banner; `pagehide` finalizes quietly; the capture `AudioContext` gets a
+  `statechange` watchdog (`onStateLost`) for iOS `interrupted` (calls,
+  Siri); returning to the tab re-arms playback via a resume that NEVER
+  creates an `AudioContext` (autoplay-safe `resumeIfCreated`).
+- **Screen Wake Lock** (`services/wakeLock.ts`, progressive enhancement):
+  acquired while the mic is open, released on finalize, OS-dropped
+  sentinels forgotten; denials (low-power mode) degrade silently.
+- **Coarse platform telemetry.** Protocol v1 stays v1 additively: optional
+  `hello.config.client.platform` (lowercase tag ≤ 24 chars, e.g.
+  `ios-safari` — never a raw user-agent); `/health` aggregates connected
+  clients into `sessions.by_platform`, giving the human device matrix a
+  ground-truth signal. Older clients omit it; never required; not echoed.
+- **PWA-lite + mobile comfort CSS.** `manifest.webmanifest` + generated
+  192/512 px icons + apple/mobile-web-app metas; `overscroll-behavior-y:
+  none` (no pull-to-refresh reload mid-recording); 16 px form controls
+  (no iOS focus zoom); sticky capture panel on small screens (mic always
+  reachable); ≥ 44 px touch targets; no framework, no new dependency.
 
-Provisioned voices: `ur_PK-fasih-medium` (Urdu, 22 050 Hz),
-`en_US-lessac-medium` (English), `es_MX-ald-medium` (Spanish — covers the
-Phase 3 `es↔en` pair). A missing voice is an honest, visible degradation —
-never a wrong-language voice.
+## 3. Delivery record (what was built)
 
-## 3. Non-negotiables applied to this phase
+Backend: `ClientInfo` protocol model (`client.platform`, optional) on
+`HelloConfig`; `Session.platform` + `/health sessions.by_platform`
+aggregation; one line in the hello handler. +7 tests (validation ×7
+params, aggregation ×2, stats shape).
 
-- **Offline by default**: local Piper synthesis, no keys, no network at
-  inference time; cloud TTS remains possible via the provider abstraction
-  (an explicit settings change, never the default).
-- **Pass-through bypasses TTS**: only `translate` decisions (Rules 1–2)
-  synthesize — asserted in WS-flow tests and verified live (the es fixture
-  produces ZERO audio frames).
-- **Replaceable providers**: `TTSProvider` interface with `piper` (default),
-  `fake` (deterministic sine stub for tests), `none`; the WebSocket layer is
-  provider-agnostic.
-- **Bounded resources**: 30 syntheses/min sliding window, ≤ 1 concurrent,
-  10 s hard timeout on a dedicated single-thread executor, 800-char text
-  cap — no unbounded memory or runaway work.
-- **Honest degradation**: every synthesis failure is a non-fatal,
-  utterance-scoped protocol error; the translated TEXT is always kept.
-- **Testing honesty**: every claim below maps to an executed test or probe
-  (§ 6).
+Frontend: `services/platform.ts` (UA → coarse tag, pure); 
+`services/wakeLock.ts` (injectable wrapper); `audioCapture.onStateLost`
+watchdog (disarmed on stop — our own close never fires it); hook
+lifecycle effects (hidden/pagehide finalize + banner, visible →
+`resumeIfCreated`), wake-lock tie-in, platform tag in every hello;
+`SpeechPlayer.resumeIfCreated`; index.html metas + manifest; app.css
+mobile block; stale "Phase 1/Phase 5" page copy refreshed; version 0.6.0.
++9 frontend tests (platform mapping, wake lock incl. OS-drop/deny,
+`resumeIfCreated` never creates a context).
 
-## 4. Delivered — v0.4.0
+Tests/ops: `frontend/scripts/smoke_phase6.mjs` (full iPhone emulation
+against the live server — 8 checks incl. the platform tag end-to-end and
+the background-tab guard); smoke_phase2/5 restored onto `main` and re-run
+as regressions; real-device matrix written into `docs/testing.md §13b`
+(Android Chrome / iPhone Safari / two-phone room, ~15 min).
 
-- **TTS provider abstraction** (`backend/app/tts/`): `base.py` (ABC +
-  typed errors), `piper_local.py` (lazy per-language voice load, discovery
-  by scanning `models/tts/<lang>/*.onnx`), `fake.py` (deterministic sine
-  provider, seeded per (language, text)), `service.py` (bounded execution:
-  rate limit, concurrency, timeout, outcomes — mirrors
-  `TranslationService`).
-- **Protocol v1 additive change** (no breaking change): `audio` JSON
-  metadata event (`id`, `language`, `encoding=pcm_s16le`, `sample_rate`,
-  `bytes`, `duration_ms`, `synthesis_ms`, `provider`) followed by exactly
-  one binary frame of raw PCM16 mono — the pairing rides WebSocket
-  ordering; metadata + binary are sent under the same per-connection lock.
-  5 new utterance-scoped non-fatal error codes: `tts_failed`,
-  `tts_timeout`, `tts_rate_limited`, `tts_unsupported_language`,
-  `tts_text_too_long`.
-- **Cancellation of outdated synthesis**: per-connection task tracking;
-  in-flight syntheses are cancelled on disconnect (mirrors Phase 3
-  translation cancellation); results for closed sockets are dropped.
-- **Browser playback** (`frontend/src/services/playback.ts`):
-  `SpeechPlayer` over the Web Audio API — Int16→Float32 conversion,
-  strictly SEQUENTIAL scheduling (each clip starts at
-  `max(now, previous end)` — overlap impossible by construction), bounded
-  queue (4 pending clips, oldest dropped when full, remaining clips
-  re-based so a cancelled/dropped clip never leaves silence), `cancel(id)`
-  (line deleted), `stopAll()` (connection lost / user stop / mute),
-  AudioContext unlocked on the mic gesture (autoplay policy).
-- **wsClient pairing**: the `audio` metadata event is paired with the next
-  binary frame and delivered as one unit (`onAudio`); stray binary frames
-  are counted, never crash; pending metadata is cleared on close.
-- **UI**: "Spoken translations" toggle (persists to localStorage; muting
-  cancels scheduled audio), a pulsing `speaking` chip on the audible line,
-  per-line voice-error chips (`no voice for this language · text kept`,
-  …), and a `stop voice` button while audio is playing.
-- **Observability**: `/health` now exposes the full `tts` section
-  (provider, languages, voices, timeout, rate limit, concurrency, text
-  cap) — a voice-less deployment is visible instead of falsely healthy
-  (BUG-003 lesson applied to TTS). `start.sh` provisions voices
-  idempotently and fails loudly.
+## 4. Verification (measured 2026-11-06)
 
-## 5. Verification (all executed, not claimed)
-
-- Backend: **155 passed + 1 xfailed** (`pytest`) — +25 Phase 4 tests:
-  service bounds (timeout / rate limit / concurrency=1 / unsupported /
-  too-long / disabled), provider discovery (incl. broken-voice rejection),
-  WS flow (audio+binary pairing with size/RMS/duration assertions,
-  pass-through bypass with `tts.calls == 0`, failure / unsupported /
-  rate-limit error mapping, disabled keeps the Phase 3 shape), health
-  exposure.
-- `tts_real` marked test: real ur/en/es synthesis through
-  `PiperTTSProvider` (RMS > 0.05, duration bounds, 22 050 Hz).
-- Frontend: **81/81 vitest**, `tsc --noEmit` clean, ESLint 0 problems;
-  production build 254.5 kB JS. +24 Phase 4 tests: SpeechPlayer
-  (sequential scheduling, queue bound, re-basing after cancel, mute,
-  autoplay resume), wsClient pairing (+ stray frame counter, stale-meta
-  clear on close), `audio` event parsing (incl. rejects), voice-error
-  helpers.
-- **E2E TTS check 3/3 PASS** (`scripts/e2e_tts_check.py`, live server):
-  Rule 1 ur→en — translation 109 ms, spoken English 2 577 ms of audio
-  synthesized in 1 573 ms (first-use voice load included), PCM RMS 0.191,
-  binary size = `bytes`; Rule 2 en→ur — 157 ms, spoken Urdu 3 424 ms of
-  audio in 546 ms, RMS 0.188; Rule 3 es — pass-through with ZERO audio
-  frames (TTS bypassed).
-- Live regression: translation E2E **3/3 PASS**, silence guard **PASS**,
-  browser smoke **10/10** (zero console errors) after the playback UI.
-- Measured live synthesis (warm, in the Rule 2 probe): 3.4 s of Urdu audio
-  in 546 ms (RTF ≈ 0.16 incl. load; 0.06–0.08 steady-state).
-
-## 6. Known limitations (honest list)
-
-- Piper `medium` voices are comprehension-grade, not human-equivalent; the
-  Urdu voice (UAT dataset, eSpeak `ur` phonemization) can render
-  anglicisms with an Urdu accent in mixed-language sentences.
-- First synthesis into a language pays ~1.5 s of lazy voice load (later
-  sentences are RTF ≈ 0.06–0.08); a startup warm-load of all voices would
-  trade ~4.5 s boot time + ~300 MB RSS for zero first-use latency — not
-  chosen.
-- Playback is desktop-browser verified (headless Chromium smoke + unit
-  tests with an injected fake AudioContext); real-device audio behavior
-  (iOS Safari low-power mode, background tabs) is **Phase 6** scope.
-- Pass-through speech is intentionally never regenerated — the other
-  participant hears the ORIGINAL audio for third languages (spec rule),
-  not a voiced rendition of its transcript.
-- Real-device testing (Android Chrome / iOS Safari) remains **Phase 6**.
-
-## 7. Phase status & approval (master prompt §23)
-
-Workflow applied: `COMPLETE → TEST → FIX → VERIFY ACCEPTANCE CRITERIA →
-DOCUMENT → REPORT → REQUEST APPROVAL`.
-
-| Acceptance criterion (§17) | Status |
+| Check | Result |
 | --- | --- |
-| TTS provider abstraction | ✅ verified (code + tests, 3 providers) |
-| Urdu TTS evaluation and integration | ✅ verified (real synthesis, RMS-checked) |
-| English TTS evaluation and integration | ✅ verified (real synthesis, E2E) |
-| Target-language speech generation | ✅ verified (speaks the DECISION target, both directions) |
-| Browser-compatible audio output | ✅ verified (PCM16 + Web Audio, autoplay unlock) |
-| Audio playback | ✅ verified (live E2E + smoke) |
-| Playback queue management | ✅ verified (bounded queue, oldest-drop, unit tests) |
-| Prevention of overlapping audio | ✅ verified (sequential scheduling — structurally impossible) |
-| Cancellation of outdated audio | ✅ verified (line delete / stop / mute / disconnect) |
-| Provider failure handling | ✅ verified (5 non-fatal utterance-scoped codes, text kept) |
-| Pass-through bypasses TTS | ✅ verified (WS tests + live E2E: zero audio frames) |
-| Actual generated audio tested | ✅ RMS/duration/size assertions, real voices |
+| Backend suite | **177 passed + 1 xfailed** (fast markers; +7 Phase 6 tests) |
+| Frontend suite | **123/123 vitest** (+9 Phase 6), tsc clean, ESLint 0, build clean (263 kB) |
+| `smoke_phase6.mjs` (iPhone emulation, live :3000) | **8/8 PASS** — render, manifest, 0 px overflow, connect, `by_platform={"ios-safari":1}`, tap-start, tap-stop (honest `no_speech_detected` only), background-tab guard fires the honest banner |
+| Regression: `smoke_phase2.mjs` (solo) | **10/10** |
+| Regression: `smoke_phase5.mjs` (two pages) | **12/12** |
+| Live E2E: translation (Phase 3 paths) | **3/3 PASS** |
+| Live E2E: two-participant routing (Phase 5) | **4/4 PASS** — voices reach only the listener; relay without TTS; speaker stream carries text only |
+| Silence guard (hallucination) | **PASS** |
 
-**Current status:** implemented and fully verified (unit + WS-flow + real
-synthesis + live E2E + browser smoke). **Phase 5 (complete browser MVP —
-two-person sessions) has NOT been started** and will not start without the
-user's explicit approval.
+## 5. Honest boundaries
+
+- No physical phone exists in this sandbox: everything above is device
+  EMULATION in headless Chromium. The human matrix
+  ([testing.md §13b](docs/testing.md)) — Android Chrome, iPhone Safari
+  (interruptions, silent switch, low-power mode, lock screen), acoustic
+  coupling on loudspeakers — is written and ready but NOT yet run; no
+  hardware claims are made (KI-004/KI-015/KI-018 stay open until it is).
+- Wake lock support is progressive: iOS Safari historically lacks it
+  (screen locks anyway); the app degrades to the honest-stop path.
+- The platform tag is UA-heuristic: iPadOS 13+ masquerading as desktop
+  Safari reports as desktop; accepted (observational only).
+- Transcript line deletion stays local-only (KI-016) and host language
+  changes still apply on the next connection (KI-017) — accepted Phase 5
+  scope, untouched here.

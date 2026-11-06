@@ -140,6 +140,7 @@ All in `backend/.env.example`; highlights:
 | `TTS_RATE_LIMIT_PER_MINUTE` | `30` | sliding-window synthesis cap |
 | `TTS_MAX_CONCURRENT` | `1` | synthesis is CPU-bound |
 | `TTS_MAX_TEXT_CHARS` | `800` | longer texts are not spoken (text kept) |
+| `ROOM_LINGER_SECONDS` | `120` | Phase 5: how long an empty room survives for reconnection (ADR-0014) |
 | `TTS_WORKER_THREADS` | `1` | synthesis executor size |
 | `HF_HOME` | *(set by start.sh)* | keeps model cache inside the project |
 | `HF_ENDPOINT` | *(unset)* | mirror for filtered networks |

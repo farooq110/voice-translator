@@ -208,7 +208,7 @@ describe('TranslatorWsClient', () => {
     await vi.advanceTimersByTimeAsync(0)
     ws.serverFrame(READY_EVENT)
 
-    await vi.advanceTimersByTimeAsync(20_000)
+    await vi.advanceTimersByTimeAsync(4_000)
     const types = ws.sentJson().map((msg) => (msg as { type?: string }).type)
     expect(types).toContain('ping')
   })
@@ -221,7 +221,7 @@ describe('TranslatorWsClient', () => {
     await vi.advanceTimersByTimeAsync(0)
     first.serverFrame(READY_EVENT)
 
-    await vi.advanceTimersByTimeAsync(20_000) // ping sent, pong timer armed
+    await vi.advanceTimersByTimeAsync(4_000) // ping sent, pong timer armed
     await vi.advanceTimersByTimeAsync(10_000) // pong timeout → close
     expect(statuses).toContain('reconnecting')
 
@@ -385,5 +385,102 @@ describe('TranslatorWsClient', () => {
     ws.serverFrame({ ...AUDIO_META, encoding: 'mp3' })
     expect(protocolErrors.length).toBe(1)
     expect(audio).toHaveLength(0)
+  })
+})
+
+describe('TranslatorWsClient — relay pairing (Phase 5, ADR-0014)', () => {
+  const RELAY_META = {
+    v: 1,
+    type: 'relay',
+    id: 'h_c_0001',
+    speaker: 'host',
+    language: 'es',
+    encoding: 'pcm_s16le',
+    sample_rate: 16000,
+    channels: 1,
+    bytes: 4,
+    duration_ms: 125,
+  }
+
+  function makeClientWithRelay(): {
+    client: TranslatorWsClient
+    events: ServerEvent[]
+    relays: { meta: unknown; pcm: ArrayBuffer }[]
+    protocolErrors: string[]
+  } {
+    const events: ServerEvent[] = []
+    const relays: { meta: unknown; pcm: ArrayBuffer }[] = []
+    const protocolErrors: string[] = []
+    const client = new TranslatorWsClient({
+      url: 'ws://testserver/ws/audio',
+      config: CONFIG,
+      handlers: {
+        onStatus: () => {},
+        onEvent: (event) => events.push(event),
+        onProtocolError: (error) => protocolErrors.push(error.message),
+        onRelay: (meta, pcm) => relays.push({ meta, pcm }),
+      },
+      webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+    })
+    return { client, events, relays, protocolErrors }
+  }
+
+  it('pairs a relay metadata event with the following binary frame', async () => {
+    const { client, relays } = makeClientWithRelay()
+    client.connect()
+    const ws = lastSocket()
+    ws.open()
+    await vi.advanceTimersByTimeAsync(0)
+    const pcm = new Int16Array([7, 8]).buffer
+    ws.serverFrame(RELAY_META)
+    ws.onmessage?.({ data: pcm })
+    expect(relays).toHaveLength(1)
+    expect(relays[0]?.meta).toMatchObject({ type: 'relay', id: 'h_c_0001', speaker: 'host' })
+    expect(relays[0]?.pcm).toBe(pcm)
+  })
+
+  it('does NOT deliver relay metadata through onEvent and never through onAudio', async () => {
+    const { client, events, relays } = makeClientWithRelay()
+    client.connect()
+    const ws = lastSocket()
+    ws.open()
+    await vi.advanceTimersByTimeAsync(0)
+    ws.serverFrame(RELAY_META)
+    ws.onmessage?.({ data: new Int16Array([1, 1]).buffer })
+    expect(events).toHaveLength(0)
+    expect(relays).toHaveLength(1)
+  })
+
+  it('keeps audio and relay pairings independent and in order', async () => {
+    const events: ServerEvent[] = []
+    const audio: unknown[] = []
+    const relays: unknown[] = []
+    const client = new TranslatorWsClient({
+      url: 'ws://testserver/ws/audio',
+      config: CONFIG,
+      handlers: {
+        onStatus: () => {},
+        onEvent: (event) => events.push(event),
+        onProtocolError: () => {},
+        onAudio: (meta) => audio.push(meta),
+        onRelay: (meta) => relays.push(meta),
+      },
+      webSocketFactory: (url) => new FakeWebSocket(url) as unknown as WebSocket,
+    })
+    client.connect()
+    const ws = lastSocket()
+    ws.open()
+    await vi.advanceTimersByTimeAsync(0)
+    ws.serverFrame(RELAY_META)
+    ws.onmessage?.({ data: new Int16Array([1, 2]).buffer })
+    ws.serverFrame({
+      v: 1, type: 'audio', id: 'g_c_0001', language: 'ur',
+      encoding: 'pcm_s16le', sample_rate: 22050, channels: 1,
+      bytes: 4, duration_ms: 900, synthesis_ms: 40, provider: 'piper', speaker: 'guest',
+    })
+    ws.onmessage?.({ data: new Int16Array([3, 4]).buffer })
+    expect(relays).toHaveLength(1)
+    expect(audio).toHaveLength(1)
+    expect((audio[0] as { speaker?: string }).speaker).toBe('guest')
   })
 })

@@ -7,9 +7,14 @@ import type { TranscriptEntry } from '../hooks/useTranslatorSession'
 interface TranscriptPanelProps {
   entries: TranscriptEntry[]
   /** Removes one sentence bubble (the × button next to each line). */
-  onDelete: (id: string) => void
-  /** Id of the utterance whose translated speech is currently audible. */
+  onDelete: (key: string) => void
+  /** Key of the utterance whose translated speech is currently audible. */
   speakingId: string | null
+  /** This client's room role (Phase 5): lines by the OTHER participant get
+   * a name chip. Null in solo mode (no labels — the Phase 1–4 look). */
+  ownRole: 'host' | 'guest' | null
+  /** Phase 5 flag: when rooms are off, no speaker chips are rendered. */
+  roomsEnabled: boolean
 }
 
 /**
@@ -24,7 +29,7 @@ interface TranscriptPanelProps {
  * Pass-through lines never show a translation (the server never produces
  * one), and a failed translation keeps the original text with a warning.
  */
-export function TranscriptPanel({ entries, onDelete, speakingId }: TranscriptPanelProps) {
+export function TranscriptPanel({ entries, onDelete, speakingId, ownRole, roomsEnabled }: TranscriptPanelProps) {
   const newestFirst = useMemo(() => [...entries].reverse(), [entries])
 
   return (
@@ -37,10 +42,21 @@ export function TranscriptPanel({ entries, onDelete, speakingId }: TranscriptPan
         </p>
       ) : (
         <ul className="transcript-list">
-          {newestFirst.map((entry) => (
-            <li key={entry.id} className="transcript-item">
-              <div className="transcript-meta">
-                <span className="chip">{entry.language.toUpperCase()}</span>
+          {newestFirst.map((entry) => {
+            const fromPeer =
+              roomsEnabled && ownRole !== null && entry.speaker !== undefined && entry.speaker !== ownRole
+            return (
+              <li
+                key={entry.key}
+                className={`transcript-item${fromPeer ? ' transcript-item--peer' : ''}`}
+              >
+                <div className="transcript-meta">
+                  {fromPeer ? (
+                    <span className="chip chip--peer" title="Spoken by the other participant">
+                      {ownRole === 'host' ? 'Guest' : 'Host'}
+                    </span>
+                  ) : null}
+                  <span className="chip">{entry.language.toUpperCase()}</span>
                 <span className="transcript-meta__muted">
                   {Math.round(entry.languageProbability * 100)}% · {entry.processingMs} ms ·{' '}
                   {entry.audioDurationS.toFixed(1)} s
@@ -66,7 +82,7 @@ export function TranscriptPanel({ entries, onDelete, speakingId }: TranscriptPan
                 {TRANSLATION_ENABLED && entry.voiceError ? (
                   <span className="chip chip--warn">{voiceErrorText(entry.voiceError.code)}</span>
                 ) : null}
-                {entry.id === speakingId ? (
+                {entry.key === speakingId ? (
                   <span className="chip chip--speaking" aria-label="Speaking">
                     speaking
                   </span>
@@ -77,7 +93,7 @@ export function TranscriptPanel({ entries, onDelete, speakingId }: TranscriptPan
                   className="transcript-delete"
                   aria-label="Delete this sentence"
                   title="Delete this sentence"
-                  onClick={() => onDelete(entry.id)}
+                  onClick={() => onDelete(entry.key)}
                 >
                   <svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true">
                     <path
@@ -111,7 +127,8 @@ export function TranscriptPanel({ entries, onDelete, speakingId }: TranscriptPan
                 </div>
               ) : null}
             </li>
-          ))}
+          )
+          })}
         </ul>
       )}
     </section>

@@ -117,8 +117,52 @@ explicit approval per master prompt §23.
 | P4-06 | Verification: backend **155 passed + 1 xfailed** (+25 tests, incl. `tts_real` real synthesis); frontend **81/81** + tsc + ESLint + build 254.5 kB; live `e2e_tts_check.py` **3/3** (real speech → real MT → real synthesis, RMS-checked; es pass-through → ZERO audio frames); translation E2E 3/3 + silence guard PASS + browser smoke 10/10 (zero console errors) | DONE |
 | P4-07 | Docs: ADR-0013; protocol spec §3b + error table; architecture.md (diagram, threading, language path, testing); deployment.md §4.2 + env vars; testing.md §11; README (status/diagram/limitations/roadmap); prompt.md (Phase 4 record); DECISIONS D-015; CHANGELOG 0.4.0; CURRENT_STATE; APP_VERSION 0.4.0 | DONE |
 
-## Phase 5+ — see `prompt.md` section 17
+## Phase 5 — Complete Browser MVP (Two Participants) — COMPLETE (pending approval)
 
-Two-person MVP (P5), mobile compatibility (P6), Zoom (P7), extension (P8),
-more apps (P9), production (P10). All `TODO` and **blocked until the
-respective phase is approved**.
+Approval: user message "start phase 5 and complete it" (2026-11-04) —
+explicit approval per master prompt §23.
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P5-01 | Room model (ADR-0014): `app/ws/rooms.py` Room + RoomManager (6-char unambiguous invite codes, in-memory, 120 s linger + rejoin, `ROOM_LINGER_SECONDS`), room-aware hello (host creates/rejoins, guest joins configuring nothing), `peer` joined/left events, fatal `room_required`/`room_not_found`/`room_full`/`missing_languages`, leave/linger cleanup, `/health rooms` — 16 WS room tests (scenarios 1–11 with fakes) | DONE |
+| P5-02 | Routing: transcripts + translations broadcast to both members with `speaker` tags; synthesized audio ONLY to the other participant (solo fallback = exact Phase 1–4 shape); translation failures shared, TTS failures to the audio's recipients, STT errors speaker-local; pass-through relay of the ORIGINAL captured audio (16 kHz, never TTS, never replayed to the speaker); guest decoded against the host's pair | DONE |
+| P5-03 | Protocol v1 additive: optional `role`/`room` in hello + optional language fields (validated), `speaker` on transcription/translation/audio/error, `RelayEvent` + binary pairing, null fields omitted (absent ≡ null, documented); frontend protocol parser extended | DONE |
+| P5-04 | Frontend: invite-link flow (`?room=CODE`), guest view with NO language panel + host's pair, host invite panel (code + copy link + peer status), speaker-aware transcript keyed (speaker, id) with Guest/Host chips, wsClient relay pairing, room-fatal errors stop reconnect, host rejoin via stored code | DONE |
+| P5-05 | Feedback-loop prevention (scenario 12): server never re-ingests output audio (asserted) + client `PlaybackGuard` dropping uplink while REMOTE audio plays (+300 ms tail; own-utterance TTS never arms it) — 6 unit tests | DONE |
+| P5-06 | Verification: backend **171 passed + 1 xfailed**; frontend **101/101** + tsc + ESLint + build; live `e2e_phase5_check.py` **4/4** (two real connections, real STT/MT/Piper: routed voice only to the listener, relay without TTS, same-language both ways); translation E2E 3/3 + silence guard PASS; `smoke_phase5.mjs` **12/12** (invite-link join, guest sees no settings, both record, zero console errors); `smoke_phase2.mjs` 10/10 | DONE |
+| P5-07 | Docs: ADR-0014; README (status/diagram/limitations/roadmap); protocol spec (rooms/peer/relay/speaker + error table); architecture.md; testing.md §12; deployment.md (ROOM_LINGER_SECONDS); prompt.md (Phase 5 record); DECISIONS D-016; KNOWN_ISSUES KI-016/017/018; CHANGELOG 0.5.0; CURRENT_STATE; APP_VERSION 0.5.0; branch-local PHASE-5.md (phase-5 branch only) | DONE |
+
+## Phase 5 QA round — Deployment hardening — COMPLETE (pending approval)
+
+Input: independent QA verification report (Journal, 2026-11-05) — verdict
+"NOT ACCEPTED yet", blockers BUG-001/BUG-002, advisory BUG-003.
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P5-QA-1 | BUG-001: TTS provisioning integrity — `download_tts_voices.py` retry/backoff for HF 429 + `--verify` (all voices complete or exit 1); `start.sh` verify-gates the boot; startup `TTS PROVISIONING WARNING` log + additive `/health.tts.warning`; voices re-provisioned live (ur/en/es onnx+json) | DONE |
+| P5-QA-2 | BUG-002: stale-seat eviction — `last_seen` per connection refreshed on every received frame; rejoin evicts its own seat's ghost after `ROOM_STALE_SEAT_SECONDS` (12 s) with fatal `seat_taken` + server-side close + honest `peer left`; `leave_room()` identity guard (an evicted ghost can never eject the returning member); live occupants keep fatal `room_full` | DONE |
+| P5-QA-3 | BUG-002 client side: 4 s heartbeat (pong deadline armed once per unanswered ping), `room_full` retried during RECONNECT ≤90 s with honest banner (first-join room_full stays fatal), `seat_taken` added to fatal codes | DONE |
+| P5-QA-4 | BUG-003: app-layer verified on both ends (server closes on every fatal path — confirmed locally; client closes on room-fatal errors; half-open sockets reaped ≤14 s by the pong timeout); proxy close-frame gap documented (KI-021) for the production deployment | DONE |
+| P5-QA-5 | Verification: backend suite green (+6 tests: eviction host/guest, live-seat guard, cleanup regression, health warnings ×2); frontend 101/101 + tsc + build; live probe 5/5 (TTS delivery to the opposite participant only 110,592 B PCM, zero self-audio, solo fallback, ghost reclaim after 13 s, live-seat room_full, fatal close); `/health` v0.5.1 shows `tts.languages=[en,es,ur]` | DONE |
+| P5-QA-6 | Docs: ADR-0015; protocol spec (eviction + `seat_taken` + heartbeat + retry semantics); DECISIONS D-017; KNOWN_ISSUES KI-019/020/021; CHANGELOG 0.5.1; CURRENT_STATE; APP_VERSION 0.5.1; PHASE-5.md QA-round section (phase-5 branch) | DONE |
+
+## Phase 6 — Mobile/browser compatibility — COMPLETE (pending approval)
+
+Approval: user message "start phase 6 and complete it" (2026-11-06) —
+explicit approval per master prompt §23 (it also closes the Phase 5
+approval record).
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P6-01 | Honest capture lifecycle (ADR-0016): `visibilitychange → hidden` finalizes the recording exactly like a connection loss (capture stopped, buffer flushed, playback + PlaybackGuard cleared) with a plain-language banner; `pagehide` finalizes quietly; `startMicCapture` gains a `statechange` watchdog (`onStateLost`) for iOS `interrupted`/suspension, disarmed on stop; return-to-tab re-arms playback via `SpeechPlayer.resumeIfCreated()` (never creates an AudioContext) | DONE |
+| P6-02 | Screen Wake Lock (`services/wakeLock.ts`, injectable + unit-tested): acquire on recording start, release on finalize, OS-dropped sentinels forgotten, denials (low-power mode) degrade silently | DONE |
+| P6-03 | Coarse platform telemetry: protocol v1 additive optional `hello.config.client.platform` (lowercase tag ≤ 24 chars, never a raw UA); `Session.platform` + `/health sessions.by_platform` aggregation; 7 params validation tests + 2 aggregation tests; older clients unaffected | DONE |
+| P6-04 | Mobile comfort: PWA manifest + generated 192/512 icons + apple metas; `overscroll-behavior-y: none` (no pull-to-refresh reload mid-recording); 16 px form controls (no iOS focus zoom); sticky capture panel on small screens; ≥ 44 px touch targets; stale phase copy in index.html/footer refreshed; frontend version 0.6.0 | DONE |
+| P6-05 | Verification: backend **177 passed + 1 xfailed** (+7); frontend **123/123** (+9: platform mapping, WakeLock incl. OS-drop/deny, resumeIfCreated) + tsc + ESLint + build; `smoke_phase6.mjs` under FULL iPhone emulation **8/8** (incl. platform tag end-to-end + background-tab guard); regressions smoke_phase2 **10/10**, smoke_phase5 **12/12**; live E2E translation **3/3**, two-participant **4/4**, silence guard **PASS** | DONE |
+| P6-06 | Human real-device matrix written into `docs/testing.md §13b` (Android Chrome ×7, iPhone Safari ×7 incl. call/Siri interruption, lock screen, silent switch, low-power mode; two-phone room ×4) — the sandbox has no hardware; no claims made until it runs (KI-004/015/018) | DONE (matrix ready; hardware run is human) |
+| P6-07 | Docs: ADR-0016; protocol spec (hello.client + mobile lifecycle obligations §6); testing.md §13; README (status/limitations/roadmap); prompt.md → Phase 6 record; DECISIONS D-018; KNOWN_ISSUES KI-004/015/018 updated; CHANGELOG 0.6.0; CURRENT_STATE; APP_VERSION 0.6.0 | DONE |
+
+## Phase 7+ — see `prompt.md` section 17
+
+Zoom (P7), extension (P8), more apps (P9), production (P10). All `TODO`
+and **blocked until the respective phase is approved**.

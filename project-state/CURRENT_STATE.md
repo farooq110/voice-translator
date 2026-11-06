@@ -1,35 +1,64 @@
 # CURRENT_STATE
 
-_Last updated: 2026-11-04 — Phase 4 implemented + verified (v0.4.0), pending approval_
+_Last updated: 2026-11-06 — Phase 6: mobile/browser compatibility implemented + verified (v0.6.0), pending approval_
 
 ## Phase
 
-**Phase 4 — Text-to-Speech and Browser Audio Playback** — implemented and
-verified (2026-11-04, ADR-0013). Phases 1–3 remain complete (Phase 3 is
-pending its own approval; both were requested together and delivered in one
-working session). Work sits on `main` and is pushed to both `main` and
-`phase-3` per the user's standing delivery instruction.
+**Phase 6 — Mobile/browser compatibility** — implemented and verified
+(2026-11-06, ADR-0016). **Phases 1–5 are complete and closed** (the Phase 5
+approval record is closed by the user's "start phase 6" instruction, per
+master prompt §23). Work sits on `main` and is pushed to `main` and the
+`phase-6` branch per the user's delivery instruction (`PHASE-N.md` deep
+dives live ONLY on their own branches; `prompt.md` now documents Phase 6
+and clears the previous phase's record).
+
+**QA round (2026-11-05, ADR-0015):** the independent QA verification
+(Journal) blocked acceptance with BUG-001 (deployment had no usable Piper
+voices — HF 429 during boot provisioning), BUG-002 (a ghost seat blocked
+rejoin ~180 s after an unclean drop through the preview proxy) and BUG-003
+(fatal errors' close frames swallowed by the same proxy). All three are
+fixed and re-verified live: voices provisioned + verify-gated boot +
+`/health.tts.warning`; stale-seat eviction (12 s silence threshold, live
+occupants protected); client 4 s heartbeat + `room_full` reconnect retry.
+Deployment runs v0.5.1 with the full ur/en/es voice set.
 
 ## Current task
 
-Phase 4 complete: offline Piper TTS (ur/en/es voices under `models/tts/`,
-ADR-0013), bounded TTSService (30/min, ≤1 concurrent, 10 s timeout, 800-char
-cap), additive protocol v1 `audio` metadata event + one binary PCM16 frame
-per translated utterance (metadata+binary sent under one lock), 5 new
-utterance-scoped non-fatal error codes, per-connection synthesis
-cancellation, browser SpeechPlayer (sequential scheduling — overlap
-impossible by construction — bounded queue with oldest-drop and re-basing
-after cancel, mute toggle, autoplay unlock, stop/cancel), /health `tts`
-section, start.sh voice provisioning. Pass-through bypasses TTS (asserted in
-tests, verified live). Verified: backend 155+1xfail, frontend 81/81 +
-typecheck + lint + build, e2e_tts_check 3/3 live (real speech → real MT →
-real synthesis, RMS-checked; es pass-through produced ZERO audio frames),
-translation E2E 3/3, silence guard PASS, browser smoke 10/10. APP_VERSION
-0.4.0. **Phase 5 (complete browser MVP — two-person sessions) awaits
-explicit user approval (master prompt §23).**
+Phase 6 complete: mobile/browser compatibility (ADR-0016). The code-
+controlled half is implemented and live-verified:
+
+- **Honest capture lifecycle** — backgrounding the tab (`visibilitychange
+  → hidden`), navigating away (`pagehide`) or an OS interruption (capture
+  AudioContext leaves `running` — iOS `interrupted`, calls, Siri) now
+  finalizes the recording exactly like a connection loss: capture stopped,
+  buffered audio flushed, playback + PlaybackGuard cleared, honest banner
+  on return ("Recording stopped — the browser suspended the tab…").
+  Return-to-tab re-arms playback via `resumeIfCreated()` (never creates an
+  AudioContext — autoplay-safe).
+- **Screen wake lock** while the mic is open (`services/wakeLock.ts`;
+  progressive enhancement, denials degrade silently).
+- **Platform telemetry** — optional `hello.config.client.platform` (coarse
+  tag like `ios-safari`, never a raw UA) aggregated into
+  `/health sessions.by_platform`; verified end-to-end under emulation.
+- **PWA-lite + mobile comfort** — manifest + generated icons + apple
+  metas; `overscroll-behavior-y: none` (no pull-to-refresh reload
+  mid-recording); 16 px form controls (no iOS focus zoom); sticky capture
+  panel on small screens; ≥ 44 px touch targets; stale phase copy
+  refreshed; frontend version 0.6.0.
+
+Verified 2026-11-06: backend **177 passed + 1 xfailed** (+7 Phase 6
+tests), frontend **123/123** (+9) + tsc + ESLint + build;
+`smoke_phase6.mjs` under full iPhone emulation **8/8** (incl. the
+platform tag end-to-end and the background-tab guard); regressions
+`smoke_phase2` 10/10, `smoke_phase5` 12/12; live E2E translation 3/3,
+two-participant routing 4/4, silence guard PASS. The hardware half —
+Android Chrome, iPhone Safari (silent switch, low-power, lock screen),
+loudspeaker acoustics — is the written human matrix in testing.md §13b
+(KI-004/015/018 stay open until it runs). APP_VERSION 0.6.0.
 
 ## Next step
 
-Await the user's approval verdict on Phase 3 (v0.3.1) and Phase 4 (v0.4.0).
-On approval of Phase 4, start Phase 5 per the master prompt §17 (two-person
-browser sessions, audio routing, session lifecycle).
+Await the user's approval verdict on Phase 6 (v0.6.0). The real-device
+matrix (testing.md §13b) runs when physical phones are available. Next
+phase per the master prompt §17: Phase 7 — Zoom integration (first
+meeting app), which awaits explicit user approval (§23).

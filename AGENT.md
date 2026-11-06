@@ -3,7 +3,8 @@
 This file contains durable rules for any AI agent (or human developer) working on
 this repository. The full product master prompt is maintained by the product
 owner outside the repository; this repo carries the current phase's scope and
-delivery record in `prompt.md` (now Phase 4 — TTS and browser audio playback).
+delivery record in `prompt.md` (now Phase 5 — complete browser MVP, two
+participants).
 If this file and `prompt.md` disagree on that phase's scope, `prompt.md` wins;
 propose an update to this file if a rule proves impractical.
 
@@ -90,7 +91,7 @@ Maintain (and update after every meaningful task and at each phase end):
 
 | File | Purpose |
 | --- | --- |
-| `prompt.md` | Current phase scope & delivery record (Phase 4 — TTS and browser audio playback) |
+| `prompt.md` | Current phase scope & delivery record (Phase 5 — complete browser MVP, two participants) |
 | `AGENT.md` | This file — permanent agent instructions |
 | `README.md` | Quickstart, architecture overview, limitations |
 | `docs/architecture.md` | Components, data flow, extension points |

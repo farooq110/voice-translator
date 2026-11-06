@@ -86,12 +86,18 @@ if [ -z "${TTS_PROVIDER_EFF}" ] && [ -f backend/.env ]; then
 fi
 TTS_PROVIDER_EFF="${TTS_PROVIDER_EFF:-piper}"
 if [ "${TTS_PROVIDER_EFF}" = "piper" ]; then
-  if [ ! -d models/tts ] || [ -z "$(ls -A models/tts 2>/dev/null)" ]; then
-    echo "[start.sh] TTS voices missing -> provisioning via backend/scripts/download_tts_voices.py (first boot only, ~190 MB)"
+  # QA round (BUG-001): an INCOMPLETE provisioning (voice .onnx present but
+  # its .onnx.json config lost to a transient 429) previously passed the
+  # "directory is non-empty" check and left TTS dead. --verify exits 0 only
+  # when every voice has BOTH files, so partial boots re-provision.
+  if (cd backend && .venv/bin/python scripts/download_tts_voices.py --verify); then
+    echo "[start.sh] TTS voices verified complete"
+  else
+    echo "[start.sh] TTS voices missing or incomplete -> provisioning via backend/scripts/download_tts_voices.py (first boot only, ~190 MB)"
     if (cd backend && .venv/bin/python scripts/download_tts_voices.py); then
       echo "[start.sh] TTS voices provisioned"
     else
-      echo "[start.sh] ERROR: TTS voice provisioning FAILED - translated text stays text-only (see /health tts.languages)" >&2
+      echo "[start.sh] ERROR: TTS voice provisioning FAILED - translated text stays text-only (see /health tts.languages and tts.warning)" >&2
     fi
   fi
 fi

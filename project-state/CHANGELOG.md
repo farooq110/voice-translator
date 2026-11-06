@@ -2,6 +2,114 @@
 
 All meaningful project changes. Format based on Keep a Changelog.
 
+## [0.6.0] — Phase 6: mobile/browser compatibility (2026-11-06)
+
+Input: master prompt §17 Phase 6 + KI-004/KI-015/KI-018. Scope decision
+(ADR-0016): everything the CODE controls is implemented and verified under
+full device emulation; everything that needs physical hardware is a written
+step-by-step human matrix — no hardware claims from the sandbox.
+
+### Added
+- **Honest capture lifecycle.** Backgrounding the tab, locking the phone or
+  an incoming call now STOPS the recording the same honest way a connection
+  loss does (buffer flushed, playback and feedback guard cleared) with a
+  plain-language banner — instead of streaming silence behind a fake
+  "recording" state and tripping the server's idle/stale-seat logic. The
+  capture AudioContext watches its own state (iOS `interrupted`).
+- **Screen wake lock** while the mic is open (progressive enhancement;
+  denials degrade silently).
+- **PWA-lite**: manifest + icons + apple metas — installs to a phone home
+  screen; pull-to-refresh can no longer reload the app mid-recording;
+  form controls no longer trigger iOS focus zoom; the mic panel stays
+  reachable on long transcripts; ≥ 44 px touch targets.
+- **Platform telemetry**: optional `hello.config.client.platform` (coarse
+  tag, never a raw user-agent) aggregated into `/health →
+  sessions.by_platform` — the human device matrix gets ground truth.
+
+### Verified
+- Backend 177 passed + 1 xfailed (+7 tests); frontend 123/123 (+9), tsc /
+  ESLint / build clean; `smoke_phase6.mjs` (iPhone emulation) **8/8**
+  including the platform tag end-to-end and the background-tab guard;
+  regressions smoke_phase2 10/10, smoke_phase5 12/12; live E2E translation
+  3/3, two-participant routing 4/4; silence guard PASS.
+- Real-device matrix (Android/iOS/room, ~15 min) documented in
+  docs/testing.md §13b — awaiting the human hardware run.
+
+## [0.5.1] — QA round: deployment hardening (2026-11-05)
+
+Input: independent QA verification report (Journal, 2026-11-05) — verdict
+"NOT ACCEPTED yet" with BUG-001/002/003. Fixes per ADR-0015.
+
+### Fixed
+- **BUG-001 (blocker, deployment): no usable TTS voices.** HuggingFace 429s
+  on the small `.onnx.json` voice configs left `.onnx`-only directories
+  that start.sh silently accepted. `download_tts_voices.py` now retries
+  transient failures (5 attempts, 5–60 s backoff) and has a `--verify`
+  mode; `start.sh` verify-gates provisioning before boot; the app logs a
+  `TTS PROVISIONING WARNING` when TTS is enabled but voiceless, and
+  `/health.tts.warning` exposes the same gap.
+- **BUG-002 (high): ghost seat blocked rejoin ~180 s.** Stale-seat
+  eviction: a rejoin that finds its own seat held by a member silent for
+  `ROOM_STALE_SEAT_SECONDS` (12 s) evicts the ghost (fatal `seat_taken`,
+  server-side close, honest `peer left`) and takes the seat back; live
+  occupants are never evicted (fatal `room_full` unchanged). Client: 4 s
+  heartbeat (pong deadline armed once per unanswered ping), `room_full`
+  retried during reconnects (≤90 s) instead of dying, `seat_taken` fatal.
+- **BUG-003 (low): fatal errors did not close the WebSocket through the
+  preview proxy.** App layer verified correct on both ends (server closes
+  on every fatal path — verified locally; client closes on room-fatal
+  errors, pong timeout reaps half-open sockets ≤14 s); the proxy gap is
+  documented (KI-021) for the production deployment.
+
+### Tests
+- Backend: +6 tests (ghost eviction host/guest, live-seat protection,
+  ghost-cleanup regression guard, /health TTS warning ×2) — full suite
+  green. Frontend: 101/101, tsc clean, production build OK.
+- Live probe (real Whisper/MT/Piper): TTS delivery to the opposite
+  participant only, solo fallback, ghost-seat reclaim after 13 s silence,
+  live-seat room_full, fatal-close — 5/5 PASS.
+
+## [0.5.0] — Phase 5: complete browser MVP — two participants (2026-11-04)
+
+Input: user approval "start phase 5 and complete it" (2026-11-04).
+
+### Added
+- **Two-participant rooms (ADR-0014)**: the host creates a room at hello
+  (6-char unambiguous invite code) and owns the language pair; the guest
+  joins via the shared `?room=CODE` link and configures nothing. Rooms
+  linger `ROOM_LINGER_SECONDS` (120 s default) after the last member
+  leaves — dropped clients rejoin with the same code — then are destroyed.
+- **Recipient-only audio routing**: transcripts + translations are
+  broadcast to both members with `speaker` tags; synthesized voices reach
+  ONLY the other participant (a solo room falls back to the speaker — the
+  exact Phase 1–4 shape); translation failures are shared utterance-scoped
+  errors; TTS failures reach the audio's intended recipients.
+- **Original-audio pass-through relay**: third-language utterances relay
+  the VAD-trimmed captured audio (16 kHz PCM16, metadata + one binary
+  frame) to the peer — never regenerated with TTS, never replayed to the
+  speaker.
+- **Feedback-loop prevention**: the server never re-ingests delivered
+  audio; the client `PlaybackGuard` drops uplink chunks while a REMOTE clip
+  is audible (+300 ms tail). Own-utterance TTS never arms the guard.
+- Frontend: invite panel (code + copy link), guest view without language
+  settings, speaker chips on the shared transcript, host reconnect re-joins
+  its room, room-fatal errors stop the reconnect loop.
+- `/health` gains `rooms {active, rooms}`.
+
+### Changed
+- Protocol v1 (additive): `hello.config.role`/`.room`, optional language
+  fields (host-validated), `peer` and `relay` events, optional `speaker`
+  tags; null fields omitted on the wire (absent ≡ null); new fatal codes
+  `room_required`, `room_not_found`, `room_full`, `missing_languages`.
+- APP_VERSION 0.4.0 → 0.5.0; start.sh unchanged (voices provisioned since
+  v0.4.0).
+
+### Verified
+- Backend 171 passed + 1 xfailed (+16 room tests); frontend 101/101 vitest,
+  tsc/ESLint/build clean; live two-participant E2E 4/4 (real STT + MT +
+  Piper, routed delivery proven per utterance); translation E2E 3/3;
+  silence guard PASS; two-page browser smoke 12/12; solo smoke 10/10.
+
 ## [0.4.0] — Phase 4: TTS + browser audio playback (2026-11-04)
 
 Input: user approval "start pahse 4 and complete it" (2026-11-04).

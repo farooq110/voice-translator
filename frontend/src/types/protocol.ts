@@ -8,6 +8,8 @@
 
 export const PROTOCOL_VERSION = 1
 
+export type SpeakerRole = 'host' | 'guest'
+
 export interface AudioFormat {
   encoding: 'pcm_s16le'
   sample_rate: number
@@ -15,9 +17,24 @@ export interface AudioFormat {
 }
 
 export interface HelloConfig {
-  native_language: string
-  preferred_language: string
+  /** Phase 5 (ADR-0014): the host (translator user) configures the pair; a
+   * guest sends neither — the room's pair (the host's) governs. */
+  native_language?: string
+  preferred_language?: string
+  role?: SpeakerRole
+  /** Invite code — a guest MUST present it; a host may re-send its own code
+   * to rejoin after a network drop (the room lingers briefly). */
+  room?: string
+  /** Phase 6 (KI-004): coarse self-reported platform tag, e.g. "ios-safari".
+   * Optional — the server only aggregates it into /health. */
+  client?: ClientInfo
   audio: AudioFormat
+}
+
+/** Phase 6: optional hello client description. A short tag — never a raw
+ * user-agent string. */
+export interface ClientInfo {
+  platform: string
 }
 
 // ---------------- client → server ----------------
@@ -75,12 +92,36 @@ export interface ReadyEvent {
   session_id: string
   audio: AudioFormat
   stt: SttInfo
+  /** Phase 5 (ADR-0014): present when the connection joined a room. */
+  room?: RoomInfo
+}
+
+export interface RoomInfo {
+  code: string
+  role: SpeakerRole
+  /** How many OTHER participants are in the room right now. */
+  peers: number
+  /** The room's configured pair (the host's — guests configure nothing). */
+  native_language: string
+  preferred_language: string
+}
+
+/** Room membership change (Phase 5): the other participant joined/left. */
+export interface PeerEvent {
+  v: number
+  type: 'peer'
+  event: 'joined' | 'left'
+  role: SpeakerRole
+  peers: number
 }
 
 export interface TranscriptionEvent {
   v: number
   type: 'transcription'
   id: string
+  /** Phase 5 (ADR-0014): who spoke — present only in room mode. Clients key
+   * transcript entries by (speaker, id): ids are unique per connection. */
+  speaker?: SpeakerRole
   text: string
   language: string
   language_probability: number
@@ -138,11 +179,12 @@ export interface TranslationDecision {
   detection: TranslationDetection
 }
 
-/** Translated text for the utterance with the same id (Phase 3). */
 export interface TranslationEvent {
   v: number
   type: 'translation'
   id: string
+  /** Phase 5: who spoke the translated utterance (room mode). */
+  speaker?: SpeakerRole
   text: string
   source_language: string
   target_language: string
@@ -173,6 +215,31 @@ export interface AudioEvent {
   duration_ms: number
   synthesis_ms: number
   provider: string
+  /** Phase 5: who spoke the utterance this voice belongs to (room mode) —
+   * audio is routed to the OTHER participant, so a present speaker marks the
+   * clip as remote (feedback-loop playback guard). */
+  speaker?: SpeakerRole
+}
+
+/**
+ * Original-audio pass-through relay (Phase 5, ADR-0014).
+ *
+ * For a passthrough decision the ORIGINAL captured audio (VAD-trimmed, 16 kHz)
+ * is relayed to the OTHER participant — never regenerated with TTS, never
+ * replayed to the speaker. Same pairing contract as `audio`: the metadata is
+ * ALWAYS followed by exactly one binary PCM16 frame.
+ */
+export interface RelayEvent {
+  v: number
+  type: 'relay'
+  id: string
+  speaker: SpeakerRole
+  language: string
+  encoding: 'pcm_s16le'
+  sample_rate: number
+  channels: number
+  bytes: number
+  duration_ms: number
 }
 
 export interface ErrorEvent {
@@ -184,6 +251,9 @@ export interface ErrorEvent {
   /** BUG-001: the flush this error belongs to (echoed utterance_id); absent
    * for connection-level errors and server-initiated auto-flushes. */
   utterance_id?: string
+  /** Phase 5: whose utterance the error belongs to, when delivered to a
+   * room member OTHER than the speaker (shared translation/TTS outcomes). */
+  speaker?: SpeakerRole
 }
 
 export interface PongEvent {
@@ -199,6 +269,8 @@ export type ServerEvent =
   | ErrorEvent
   | PongEvent
   | AudioEvent
+  | PeerEvent
+  | RelayEvent
 
 export class ProtocolError extends Error {
   constructor(message: string) {
@@ -239,6 +311,37 @@ function parseAudioFormat(value: unknown, ctx: string): AudioFormat {
     encoding,
     sample_rate: num(value, 'sample_rate', ctx),
     channels: num(value, 'channels', ctx),
+  }
+}
+
+function parseSpeaker(value: unknown, ctx: string): SpeakerRole | undefined {
+  if (value === undefined || value === null) return undefined
+  if (value !== 'host' && value !== 'guest') {
+    throw new ProtocolError(`${ctx}: invalid speaker "${String(value)}"`)
+  }
+  return value
+}
+
+function parseRequiredSpeaker(value: unknown, ctx: string): SpeakerRole {
+  const speaker = parseSpeaker(value, ctx)
+  if (speaker === undefined) throw new ProtocolError(`${ctx}: "speaker" is required`)
+  return speaker
+}
+
+function parseRoomInfo(value: unknown, ctx: string): RoomInfo | undefined {
+  if (value === undefined || value === null) return undefined
+  if (!isRecord(value)) throw new ProtocolError(`${ctx}: room must be an object`)
+  const role = value['role']
+  if (role !== 'host' && role !== 'guest') {
+    throw new ProtocolError(`${ctx}: invalid room role`)
+  }
+  return {
+    code: str(value, 'code', ctx),
+    role,
+    peers: num(value, 'peers', ctx),
+    native_language: typeof value['native_language'] === 'string' ? value['native_language'] : '',
+    preferred_language:
+      typeof value['preferred_language'] === 'string' ? value['preferred_language'] : '',
   }
 }
 
@@ -294,7 +397,19 @@ export function parseServerEvent(raw: string): ServerEvent {
           device: str(stt, 'device', 'ready.stt'),
           loaded: bool(stt, 'loaded', 'ready.stt'),
         },
+        room: parseRoomInfo(data['room'], 'ready.room'),
       }
+    }
+    case 'peer': {
+      const eventName = str(data, 'event', 'peer')
+      if (eventName !== 'joined' && eventName !== 'left') {
+        throw new ProtocolError(`peer: invalid event "${eventName}"`)
+      }
+      const role = data['role']
+      if (role !== 'host' && role !== 'guest') {
+        throw new ProtocolError('peer: invalid role')
+      }
+      return { v, type, event: eventName, role, peers: num(data, 'peers', 'peer') }
     }
     case 'transcription': {
       const rawDecision = data['decision']
@@ -302,6 +417,7 @@ export function parseServerEvent(raw: string): ServerEvent {
         v,
         type,
         id: str(data, 'id', 'transcription'),
+        speaker: parseSpeaker(data['speaker'], 'transcription'),
         text: str(data, 'text', 'transcription'),
         language: str(data, 'language', 'transcription'),
         language_probability: num(data, 'language_probability', 'transcription'),
@@ -322,6 +438,7 @@ export function parseServerEvent(raw: string): ServerEvent {
         v,
         type,
         id: str(data, 'id', 'translation'),
+        speaker: parseSpeaker(data['speaker'], 'translation'),
         text: str(data, 'text', 'translation'),
         source_language: str(data, 'source_language', 'translation'),
         target_language: str(data, 'target_language', 'translation'),
@@ -347,6 +464,27 @@ export function parseServerEvent(raw: string): ServerEvent {
         duration_ms: num(data, 'duration_ms', 'audio'),
         synthesis_ms: num(data, 'synthesis_ms', 'audio'),
         provider: str(data, 'provider', 'audio'),
+        speaker: parseSpeaker(data['speaker'], 'audio'),
+      }
+    }
+    case 'relay': {
+      const encoding = str(data, 'encoding', 'relay')
+      if (encoding !== 'pcm_s16le') {
+        throw new ProtocolError(`relay: unsupported encoding "${encoding}"`)
+      }
+      const channels = num(data, 'channels', 'relay')
+      if (channels !== 1) throw new ProtocolError('relay: only mono is supported')
+      return {
+        v,
+        type,
+        id: str(data, 'id', 'relay'),
+        speaker: parseRequiredSpeaker(data['speaker'], 'relay'),
+        language: str(data, 'language', 'relay'),
+        encoding,
+        sample_rate: num(data, 'sample_rate', 'relay'),
+        channels,
+        bytes: num(data, 'bytes', 'relay'),
+        duration_ms: num(data, 'duration_ms', 'relay'),
       }
     }
     case 'error': {
@@ -358,6 +496,7 @@ export function parseServerEvent(raw: string): ServerEvent {
         message: str(data, 'message', 'error'),
         fatal: bool(data, 'fatal', 'error'),
         utterance_id: typeof rawUtteranceId === 'string' ? rawUtteranceId : undefined,
+        speaker: parseSpeaker(data['speaker'], 'error'),
       }
     }
     case 'pong':

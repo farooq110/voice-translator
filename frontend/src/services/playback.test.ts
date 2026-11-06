@@ -231,3 +231,22 @@ describe('SpeechPlayer', () => {
     expect(context.sources[1]?.stopped).toBe(false)
   })
 })
+
+describe('resumeIfCreated (Phase 6)', () => {
+  it('never creates a context — visibility events must not trip autoplay', () => {
+    const before = FakeContext.instances.length
+    const player = new SpeechPlayer(() => new FakeContext() as unknown as AudioContext)
+    player.resumeIfCreated()
+    expect(FakeContext.instances).toHaveLength(before)
+  })
+
+  it('resumes an existing suspended context', () => {
+    const player = new SpeechPlayer(() => new FakeContext() as unknown as AudioContext)
+    const meta = META('a')
+    player.enqueue(meta, pcmBytes(0.1)) // creates the context
+    const context = FakeContext.instances.at(-1)!
+    context.state = 'suspended'
+    player.resumeIfCreated()
+    expect(context.resumeCalls).toBe(1)
+  })
+})

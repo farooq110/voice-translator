@@ -34,6 +34,14 @@ Invariants enforced here:
   failures surface as non-fatal, utterance-scoped errors and the original
   transcript is kept untouched. Pass-through NEVER calls the provider
   (master prompt Rules 3+4).
+- Phase 5 (ADR-0014): two-participant rooms. The host owns the room's
+  language pair; the guest configures nothing. Transcripts and translations
+  are broadcast to BOTH members with a `speaker` tag; synthesized speech is
+  routed ONLY to the other participant (a solo room falls back to local
+  playback — the exact Phase 1–4 shape); pass-through utterances relay the
+  ORIGINAL captured audio to the peer (never regenerated, never replayed to
+  the speaker — feedback-loop prevention). Rooms linger briefly after their
+  last member leaves so a dropped connection can rejoin with the same code.
 """
 
 from __future__ import annotations
@@ -60,10 +68,14 @@ from ..models.protocol import (
     AudioEvent,
     ErrorEvent,
     FlushMessage,
+    HelloConfig,
     HelloMessage,
+    PeerEvent,
     PingMessage,
     PongEvent,
     ReadyEvent,
+    RelayEvent,
+    RoomInfo,
     SttInfo,
     TranscriptionEvent,
     TranslationDecisionInfo,
@@ -81,6 +93,7 @@ from ..translation.decision import (
 )
 from ..tts import TTSService
 from .backpressure import SttQueue
+from .rooms import Room, RoomFullError, RoomManager, RoomMember
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -106,6 +119,7 @@ class _Connection:
         stt_queue: SttQueue,
         translator: TranslationService | None = None,
         tts: TTSService | None = None,
+        rooms: RoomManager | None = None,
     ) -> None:
         self.websocket = websocket
         self.settings = settings
@@ -116,8 +130,19 @@ class _Connection:
         self.stt_queue = stt_queue
         self.translator = translator
         self.tts = tts
+        self.rooms = rooms
+        # Phase 5 (ADR-0014): room membership. Every host connection owns a
+        # room; guests join their invite's room.
+        self.role: str = "host"
+        self.room: Room | None = None
         self.hello_done = False
         self.closed = False
+        # QA round (BUG-002): monotonic timestamp of the last frame RECEIVED
+        # from this client (any text/binary/disconnect). The endpoint loop
+        # refreshes it on every message. A seat whose owner has sent nothing
+        # for `room_stale_seat_seconds` is a GHOST (the platform proxy can
+        # swallow a dead client's disconnect) and may be reclaimed on rejoin.
+        self.last_seen: float = time.monotonic()
         self._send_lock = asyncio.Lock()
         self._pending: set[asyncio.Task[None]] = set()
         # Phase 3: in-flight translations are tracked so close can cancel
@@ -133,23 +158,130 @@ class _Connection:
 
     async def _send(
         self,
-        event: ReadyEvent | TranscriptionEvent | TranslationEvent | ErrorEvent | PongEvent,
+        event: (
+            ReadyEvent
+            | TranscriptionEvent
+            | TranslationEvent
+            | ErrorEvent
+            | PongEvent
+            | PeerEvent
+        ),
     ) -> None:
-        if self.closed:
-            return
-        async with self._send_lock:
-            await self.websocket.send_text(event.model_dump_json())
+        await self.room_send(event.model_dump_json(exclude_none=True))
 
-    async def _send_audio(self, meta: AudioEvent, pcm: bytes) -> None:
-        """Send one audio metadata JSON event followed by its binary PCM16
-        frame — under the SAME lock so the pairing can never interleave with
-        another event (WebSocket ordering then guarantees the client can
-        pair the next binary frame with this metadata)."""
+    async def room_send(self, payload: str) -> None:
+        """RoomMember protocol: one JSON text frame to this connection.
+        Swallows send errors on dead sockets — a failing member must never
+        break another member's delivery."""
         if self.closed:
             return
         async with self._send_lock:
-            await self.websocket.send_text(meta.model_dump_json())
-            await self.websocket.send_bytes(pcm)
+            try:
+                await self.websocket.send_text(payload)
+            except Exception:  # noqa: BLE001 — dead socket, nothing to deliver
+                logger.debug("ws.send_failed session_id=%s", self.session.id)
+
+    async def room_send_media(self, meta_json: str, pcm: bytes) -> None:
+        """One metadata JSON frame + its binary PCM frame under the SAME lock
+        so the pairing can never interleave with another event (WebSocket
+        ordering then lets the client pair the next binary frame with this
+        metadata). Used for BOTH TTS `audio` and pass-through `relay`."""
+        if self.closed:
+            return
+        async with self._send_lock:
+            try:
+                await self.websocket.send_text(meta_json)
+                await self.websocket.send_bytes(pcm)
+            except Exception:  # noqa: BLE001 — dead socket
+                logger.debug("ws.send_media_failed session_id=%s", self.session.id)
+
+    # ------------------------------------------------------------- routing
+
+    def _speaker(self) -> str | None:
+        """`speaker` tag for events in room mode; None keeps the exact
+        Phase 1–4 solo wire shape."""
+        return self.role if self.room is not None else None
+
+    def _effective_config(self) -> HelloConfig | None:
+        """The language pair that governs decisions: the ROOM's config (the
+        host's — the guest configures nothing, ADR-0014) when in a room,
+        else this connection's own config (solo)."""
+        if self.room is not None and self.room.config is not None:
+            return self.room.config
+        return self.session.config
+
+    def _audio_recipients(self) -> tuple[list[RoomMember], bool]:
+        """Who should receive this speaker's synthesized audio, and whether
+        the delivery is cross-participant (drives the `speaker` tag).
+        Room with a peer → the OTHER participant only (master prompt: the
+        system never translates a participant's speech back at them).
+        Solo room / no room → the speaker (exact Phase 1–4 fallback)."""
+        if self.room is not None:
+            peers = self.room.peers_of(self.role)
+            if peers:
+                return peers, True
+        return [self], False
+
+    async def _broadcast_text(
+        self, event: TranscriptionEvent | TranslationEvent | ErrorEvent
+    ) -> None:
+        """Send one text event to EVERY room member (transcripts, translations
+        and their errors are shared; each client tags lines by speaker).
+        Falls back to a solo send when no room is attached."""
+        if self.room is None:
+            await self._send(event)
+            return
+        payload = event.model_dump_json(exclude_none=True)
+        for member in self.room.everyone():
+            await member.room_send(payload)
+
+    async def _send_error_to(
+        self,
+        members: list[RoomMember],
+        *,
+        code: str,
+        message: str,
+        utterance_id: str | None,
+        cross_participant: bool,
+    ) -> None:
+        payload = ErrorEvent(
+            code=code,
+            message=message,
+            utterance_id=utterance_id,
+            speaker=self.role if cross_participant else None,
+        ).model_dump_json(exclude_none=True)
+        for member in members:
+            await member.room_send(payload)
+
+    async def leave_room(self) -> None:
+        """Detach from the room on disconnect: tell the remaining members the
+        peer is gone, free the slot (a reconnecting client re-hellos with the
+        same code), and arm the linger destruction when nobody is left."""
+        room = self.room
+        self.room = None
+        if room is None:
+            return
+        role = self.role
+        # QA round (BUG-002): if this seat was reclaimed (stale-seat eviction)
+        # and is now owned by a NEWER connection, this ghost's cleanup must
+        # not eject the returning participant or fire a bogus "left" event.
+        if room.members.get(role) is not self:
+            logger.info(
+                "ws.leave_skipped_seat_taken session_id=%s role=%s",
+                self.session.id, role,
+            )
+            return
+        room.leave(role)
+        for member in room.everyone():
+            await member.room_send(
+                PeerEvent(
+                    event="left",
+                    role=role,  # type: ignore[arg-type]
+                    peers=room.peer_count(excluding=member.role),
+                ).model_dump_json(exclude_none=True)
+            )
+        if not room.members and self.rooms is not None:
+            room.schedule_destroy(self.rooms)
 
     async def send_error(
         self,
@@ -166,6 +298,59 @@ class _Connection:
         await self._send(
             ErrorEvent(code=code, message=message, fatal=fatal, utterance_id=utterance_id)
         )
+
+    async def _reclaim_stale_seat(self, room: Room, role: str) -> bool:
+        """QA round (BUG-002): free `role`'s seat when its owner is a GHOST.
+
+        The preview proxy can swallow a dead client's disconnect, so the
+        server may keep the seat occupied for the full idle timeout (180 s)
+        while the participant is long gone. A returning participant that
+        re-hellos with the same code and role proves the seat owner is back;
+        the OLD connection is evicted when it has sent nothing for
+        `room_stale_seat_seconds` (a live client pings every 4 s and streams
+        audio while recording, so it can never look stale).
+
+        Returns True when a stale seat was evicted (caller retries the join).
+        """
+        stale_after = max(0.0, self.settings.room_stale_seat_seconds)
+        ghost = room.members.get(role)
+        if ghost is None:
+            return False
+        ghost_seen = getattr(ghost, "last_seen", None)
+        if ghost_seen is None or (time.monotonic() - ghost_seen) <= stale_after:
+            # Seat owner is alive (recent frames) — genuinely occupied.
+            return False
+        logger.warning(
+            "ws.room_evict_ghost code=%s role=%s silent_s=%.1f threshold_s=%.1f",
+            room.code, role, time.monotonic() - ghost_seen, stale_after,
+        )
+        room.leave(role)
+        ghost.room = None  # its eventual cleanup must not touch this room
+        # Tell the ghost why it lost the room, then close it server-side
+        # (swallow errors — its socket may already be unusable).
+        await ghost.room_send(
+            ErrorEvent(
+                code="seat_taken",
+                message="Your seat was taken over by a new connection.",
+                fatal=True,
+            ).model_dump_json(exclude_none=True)
+        )
+        try:
+            await ghost.websocket.close(code=CLOSE_POLICY_VIOLATION)
+        except Exception:  # noqa: BLE001 — dead socket
+            pass
+        # Notify whoever remains (e.g. the peer) that the ghost is gone.
+        for member in room.everyone():
+            await member.room_send(
+                PeerEvent(
+                    event="left",
+                    role=role,  # type: ignore[arg-type]
+                    peers=room.peer_count(excluding=member.role),
+                ).model_dump_json(exclude_none=True)
+            )
+        if not room.members and self.rooms is not None:
+            room.schedule_destroy(self.rooms)
+        return True
 
     # ------------------------------------------------------------------ in
 
@@ -225,6 +410,44 @@ class _Connection:
         if config.audio.channels != 1:
             await self.send_error("unsupported_channels", "Only mono audio is supported.", fatal=True)
             return False
+
+        self.role = config.role
+        # Phase 6 (KI-004): remember the self-reported platform tag so /health
+        # can show which device families actually connect. Optional on v1 —
+        # older clients simply leave it out.
+        self.session.platform = config.client.platform if config.client else None
+
+        if self.rooms is None:
+            # Defensive: no room manager (should never happen) — behave solo.
+            if not config.native_language or not config.preferred_language:
+                await self.send_error(
+                    "missing_languages",
+                    "Both a native and a preferred translation language are required.",
+                    fatal=True,
+                )
+                return False
+            self.session.config = config
+            self.hello_done = True
+            await self._send(
+                ReadyEvent(
+                    session_id=self.session.id,
+                    audio=config.audio,
+                    stt=SttInfo.model_validate(self.stt.describe()),
+                )
+            )
+            return True
+
+        if config.role == "guest":
+            return await self._join_room_as_guest(config)
+
+        # ---- host path (also the Phase 1–4 solo shape: role defaults to host)
+        if not config.native_language or not config.preferred_language:
+            await self.send_error(
+                "missing_languages",
+                "Both a native and a preferred translation language are required.",
+                fatal=True,
+            )
+            return False
         if config.native_language == config.preferred_language:
             # Not fatal: same-language conversations are valid; the translation
             # engine (Phase 3) will treat this configuration as pass-through.
@@ -233,19 +456,117 @@ class _Connection:
                 "Native and preferred languages are identical; pass-through behavior will apply.",
             )
 
+        room = self.rooms.get(config.room) if config.room else None
+        if room is not None:
+            # Rejoin within the linger window (network drop). The host stays
+            # the config authority — apply its (possibly edited) languages.
+            try:
+                room.join("host", self)
+            except RoomFullError:
+                # QA round (BUG-002): the seat may be held by a ghost (the
+                # proxy swallowed its disconnect). Reclaim it when silent.
+                if not await self._reclaim_stale_seat(room, "host"):
+                    await self.send_error(
+                        "room_full",
+                        "This room already has an active host connection.",
+                        fatal=True,
+                    )
+                    return False
+                room.join("host", self)
+            room.config = config
+            logger.info("ws.room_rejoin session_id=%s code=%s", self.session.id, room.code)
+        else:
+            # A stale/expired code simply creates a fresh room — the host
+            # receives the NEW code in `ready` and re-shares the link.
+            room = self.rooms.create(config)
+            room.join("host", self)  # register the creating host immediately
+
+        self.room = room
         self.session.config = config
         self.hello_done = True
         logger.info(
-            "ws.hello session_id=%s native=%s preferred=%s",
-            self.session.id, config.native_language, config.preferred_language,
+            "ws.hello session_id=%s role=%s room=%s native=%s preferred=%s",
+            self.session.id, config.role, room.code,
+            config.native_language, config.preferred_language,
         )
         await self._send(
             ReadyEvent(
                 session_id=self.session.id,
                 audio=config.audio,
                 stt=SttInfo.model_validate(self.stt.describe()),
+                room=RoomInfo(
+                    code=room.code,
+                    role="host",
+                    peers=room.peer_count(excluding="host"),
+                    native_language=config.native_language,
+                    preferred_language=config.preferred_language,
+                ),
             )
         )
+        # If the guest was already waiting (host rejoin), tell it the host
+        # is back.
+        for member in room.peers_of("host"):
+            await member.room_send(
+                PeerEvent(
+                    event="joined", role="host", peers=room.peer_count(excluding=member.role)
+                ).model_dump_json(exclude_none=True)
+            )
+        return True
+
+    async def _join_room_as_guest(self, config: HelloConfig) -> bool:
+        """Guest hello: join the invited room, configure nothing (ADR-0014)."""
+        if not config.room:
+            await self.send_error(
+                "room_required",
+                "A guest connection must present a room code.",
+                fatal=True,
+            )
+            return False
+        room = self.rooms.get(config.room)
+        if room is None or room.config is None:
+            await self.send_error(
+                "room_not_found",
+                "That room code is unknown or has expired — ask for a new invite link.",
+                fatal=True,
+            )
+            return False
+        try:
+            room.join("guest", self)
+        except RoomFullError:
+            # QA round (BUG-002): reclaim the seat when its owner is a ghost.
+            if not await self._reclaim_stale_seat(room, "guest"):
+                await self.send_error(
+                    "room_full",
+                    "This room already has two participants.",
+                    fatal=True,
+                )
+                return False
+            room.join("guest", self)
+        room_config = room.config
+        self.room = room
+        self.session.config = config  # audio format only; languages come from the room
+        self.hello_done = True
+        logger.info("ws.hello session_id=%s role=guest room=%s", self.session.id, room.code)
+        await self._send(
+            ReadyEvent(
+                session_id=self.session.id,
+                audio=config.audio,
+                stt=SttInfo.model_validate(self.stt.describe()),
+                room=RoomInfo(
+                    code=room.code,
+                    role="guest",
+                    peers=room.peer_count(excluding="guest"),
+                    native_language=room_config.native_language,
+                    preferred_language=room_config.preferred_language,
+                ),
+            )
+        )
+        for member in room.peers_of("guest"):
+            await member.room_send(
+                PeerEvent(
+                    event="joined", role="guest", peers=room.peer_count(excluding=member.role)
+                ).model_dump_json(exclude_none=True)
+            )
         return True
 
     async def handle_binary(self, data: bytes) -> bool:
@@ -339,14 +660,15 @@ class _Connection:
         task.add_done_callback(self._pending.discard)
 
     def _language_hint(self) -> str | None:
-        """Primary subtag of the configured native language ("ur-PK" → "ur").
+        """Primary subtag of the effective native language ("ur-PK" → "ur").
 
-        The default STT language (pinned mode + translation-disabled path,
-        KI-006/ADR-0006). In auto mode the decision engine replaces it with
-        the resolved detection language before the decode. Returns None when
-        no valid hello config is available.
+        The effective config is the ROOM's (host) config in room mode — the
+        guest configures nothing but is decoded against the host's pair
+        (ADR-0014) — else this connection's config (solo). In auto mode the
+        decision engine replaces the hint with the resolved detection
+        language before the decode. Returns None when no config is available.
         """
-        config = self.session.config
+        config = self._effective_config()
         if config is None or not config.native_language:
             return None
         primary = config.native_language.split("-", 1)[0].strip().lower()
@@ -355,7 +677,10 @@ class _Connection:
     async def _transcribe_and_deliver(self, audio: bytes, utterance_id: str) -> None:
         loop = asyncio.get_running_loop()
         started = time.perf_counter()
-        config = self.session.config
+        # Phase 5 (ADR-0014): decisions are governed by the ROOM's config —
+        # the host's language pair for BOTH participants (the guest
+        # configures nothing).
+        config = self._effective_config()
         auto_mode = (
             self.translator is not None
             and self.translator.enabled
@@ -500,6 +825,7 @@ class _Connection:
 
         event = TranscriptionEvent(
             id=utterance_id,
+            speaker=self._speaker(),
             text=result.text,
             language=language_for_event,
             language_probability=round(probability_for_event, 4),
@@ -530,7 +856,39 @@ class _Connection:
             event.audio_duration_s, processing_ms, len(event.text),
         )
         logger.debug("ws.transcript session_id=%s text=%r", self.session.id, event.text)
-        await self._send(event)
+        # Phase 5: the transcript is shared — BOTH participants see every
+        # line, tagged with its speaker (each client renders You / Guest).
+        await self._broadcast_text(event)
+
+        # Phase 5 (ADR-0014): a pass-through decision relays the ORIGINAL
+        # captured audio (VAD-trimmed speech region, 16 kHz) to the OTHER
+        # participant — as captured, never regenerated, never replayed to the
+        # speaker (master prompt Rules 3+4; feedback-loop prevention). Solo
+        # rooms keep the exact Phase 1–4 shape (no relay, no one to hear it).
+        if (
+            decision is not None
+            and decision.action == "passthrough"
+            and self.room is not None
+        ):
+            peers = self.room.peers_of(self.role)
+            relay_pcm = b"".join(plan.chunks)
+            if peers and len(relay_pcm) >= 2:
+                relay = RelayEvent(
+                    id=utterance_id,
+                    speaker=self.role,  # type: ignore[arg-type]
+                    language=language_for_event,
+                    sample_rate=self.settings.audio_sample_rate,
+                    channels=1,
+                    bytes=len(relay_pcm),
+                    duration_ms=int(plan.source_duration_s * 1000),
+                )
+                logger.info(
+                    "ws.relay session_id=%s id=%s to_peers=%d bytes=%d",
+                    self.session.id, utterance_id, len(peers), len(relay_pcm),
+                )
+                meta_json = relay.model_dump_json(exclude_none=True)
+                for member in peers:
+                    await member.room_send_media(meta_json, relay_pcm)
 
         if (
             decision is not None
@@ -565,9 +923,10 @@ class _Connection:
             )
             return
         if outcome.status == "ok":
-            await self._send(
+            await self._broadcast_text(
                 TranslationEvent(
                     id=utterance_id,
+                    speaker=self._speaker(),
                     text=outcome.text,
                     source_language=decision.source_language,
                     target_language=decision.target_language,
@@ -597,10 +956,14 @@ class _Connection:
             "timeout": "translation_timeout",
             "rate_limited": "translation_rate_limited",
         }
-        await self.send_error(
-            codes[outcome.status],
-            messages[outcome.status],
+        # Phase 5: the translated text is shared, so the failure is shared —
+        # BOTH members mark the line (the original transcript is kept).
+        await self._send_error_to(
+            self.room.everyone() if self.room is not None else [self],
+            code=codes[outcome.status],
+            message=messages[outcome.status],
             utterance_id=utterance_id,
+            cross_participant=self.room is not None,
         )
 
     async def _synthesize_and_deliver(
@@ -621,27 +984,38 @@ class _Connection:
                 self.session.id, utterance_id, outcome.status,
             )
             return
+        recipients, cross_participant = self._audio_recipients()
         if outcome.status == "ok":
             if len(outcome.pcm) < 2 or len(outcome.pcm) % 2 != 0:
                 # Defensive: never send a malformed PCM frame.
-                await self.send_error(
-                    "tts_failed",
-                    "Voice synthesis produced malformed audio — the translated text is kept.",
+                await self._send_error_to(
+                    recipients,
+                    code="tts_failed",
+                    message="Voice synthesis produced malformed audio — the translated text is kept.",
                     utterance_id=utterance_id,
+                    cross_participant=cross_participant,
                 )
                 return
-            await self._send_audio(
-                AudioEvent(
-                    id=utterance_id,
-                    language=language,
-                    sample_rate=outcome.sample_rate,
-                    bytes=len(outcome.pcm),
-                    duration_ms=outcome.audio_duration_ms,
-                    synthesis_ms=outcome.duration_ms,
-                    provider=outcome.provider,
-                ),
-                outcome.pcm,
+            # Phase 5 (ADR-0014): audio is routed to the OTHER participant
+            # (never back to the speaker); a solo room falls back to the
+            # speaker — the exact Phase 1–4 local-playback behavior.
+            meta_json = AudioEvent(
+                id=utterance_id,
+                language=language,
+                sample_rate=outcome.sample_rate,
+                bytes=len(outcome.pcm),
+                duration_ms=outcome.audio_duration_ms,
+                synthesis_ms=outcome.duration_ms,
+                provider=outcome.provider,
+                speaker=self.role if cross_participant else None,
+            ).model_dump_json(exclude_none=True)
+            logger.info(
+                "ws.audio session_id=%s id=%s bytes=%d synthesis_ms=%d recipients=%d cross=%s",
+                self.session.id, utterance_id, len(outcome.pcm),
+                outcome.duration_ms, len(recipients), cross_participant,
             )
+            for member in recipients:
+                await member.room_send_media(meta_json, outcome.pcm)
             return
         messages = {
             "failed": f"Voice synthesis failed ({outcome.error_message or 'provider error'}) — the translated text is kept.",
@@ -657,10 +1031,15 @@ class _Connection:
             "unsupported": "tts_unsupported_language",
             "text_too_long": "tts_text_too_long",
         }
-        await self.send_error(
-            codes[outcome.status],
-            messages[outcome.status],
+        # Phase 5: the audio was FOR the recipient — the recipient is the one
+        # missing it, so the utterance-scoped error goes to the same set the
+        # audio would have reached.
+        await self._send_error_to(
+            recipients,
+            code=codes[outcome.status],
+            message=messages[outcome.status],
             utterance_id=utterance_id,
+            cross_participant=cross_participant,
         )
 
     async def _decode_plan(
@@ -729,6 +1108,7 @@ async def audio_socket(websocket: WebSocket) -> None:
         stt_queue=stt_queue,
         translator=getattr(websocket.app.state, "translator", None),
         tts=getattr(websocket.app.state, "tts", None),
+        rooms=getattr(websocket.app.state, "rooms", None),
     )
     logger.info("ws.open session_id=%s", session.id)
 
@@ -744,6 +1124,9 @@ async def audio_socket(websocket: WebSocket) -> None:
                 )
                 await websocket.close(code=CLOSE_GOING_AWAY)
                 break
+            # QA round (BUG-002): every received frame proves the client is
+            # alive — the stale-seat eviction heuristic depends on it.
+            conn.last_seen = time.monotonic()
             if message["type"] == "websocket.disconnect":
                 break
             text = message.get("text")
@@ -765,6 +1148,7 @@ async def audio_socket(websocket: WebSocket) -> None:
             task.cancel()  # cancellation of outdated requests (prompt §10/§15)
         for task in list(conn._tts_tasks):
             task.cancel()  # Phase 4: cancel outdated syntheses the same way
+        await conn.leave_room()  # Phase 5: notify the peer, arm the linger
         sessions.remove(session.id)
         logger.info(
             "ws.close session_id=%s utterances=%d leftover_bytes=%d",
