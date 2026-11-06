@@ -27,6 +27,14 @@ client → {"v":1,"type":"hello","config":{...}}     # MUST be the first message
 client ← {"v":1,"type":"ready","session_id":"s_…","audio":{…},"stt":{…},"room":{…}}
 ```
 
+The handshake must be able to save itself (QA round v0.6.1, ADR-0017):
+the client MAY repeat `hello` until `ready` arrives — a repeated hello is
+re-acked with a fresh `ready` for the SAME session and room (idempotent,
+never an error); the server does NOT answer `ping` before `hello` completes
+(a pong proves the handshake, not just the socket); and a socket that never
+says `hello` is closed after `ws_hello_timeout_seconds` (15 s) with a fatal
+`hello_timeout`.
+
 `hello.config`:
 
 | Field | Type | Notes |
@@ -47,8 +55,9 @@ invite code, this connection's role, how many OTHER participants are
 connected, and the ROOM's language pair (the host's). Solo clients from
 older builds tolerate the extra field.
 
-Violations: binary before `hello` → fatal `hello_required`; second `hello` →
-non-fatal `hello_already_sent`; host languages missing → fatal
+Violations: binary before `hello` → fatal `hello_required`; a repeated
+`hello` is NOT a violation (re-acked with a fresh `ready`, ADR-0017); host
+languages missing → fatal
 `missing_languages`; identical host languages → non-fatal
 `identical_languages` warning (pass-through semantics apply from Phase 3);
 guest without a code → fatal `room_required`; unknown/expired code → fatal
@@ -89,8 +98,8 @@ genuinely occupied room still answers fatal `room_full`.
 client → binary PCM16 chunk (typ. 100 ms = 3 200 bytes)
 client → {"v":1,"type":"flush","utterance_id":"c_0001_ab12cd"}   # end of utterance
 client ← {"v":1,"type":"transcription", …}       # result (see below)
-client → {"v":1,"type":"ping","ts":123}          # heartbeat (client, 20 s cadence)
-client ← {"v":1,"type":"pong","ts":123}
+client → {"v":1,"type":"ping","ts":123}          # heartbeat (client, 4 s cadence — ADR-0015)
+client ← {"v":1,"type":"pong","ts":123}          # NOT answered before `hello` completes (ADR-0017)
 ```
 
 `utterance_id` on `flush` is **optional** (added in the BUG-001 fix,
@@ -260,7 +269,7 @@ server-initiated auto-flushes.
 | `idle_timeout` | yes | no frames for 180 s |
 | `invalid_message` | no | schema violation (payload kept alive) |
 | `malformed_json` | no | non-JSON text frame |
-| `hello_already_sent` | no | duplicate hello |
+| `hello_timeout` | yes | **QA round v0.6.1 (ADR-0017):** no `hello` within `ws_hello_timeout_seconds` (15 s) — the socket cannot recover, the server recycles it |
 | `identical_languages` | no | native == preferred warning |
 | `chunk_too_large` | no | chunk dropped |
 | `invalid_chunk_alignment` | no | odd byte count dropped |
@@ -288,7 +297,9 @@ capacity, 1001 idle).
 
 ## 5. Client obligations
 
-- Send `hello` exactly once, before any binary frame.
+- Send `hello` as the first message, and repeat it on every heartbeat tick
+  until `ready` arrives (BUG-601: a lost hello must be retried — the server
+  re-acks idempotently).
 - Keep chunks ≤ 256 KiB (the reference client sends 100 ms chunks).
 - Heartbeat with `ping` every **4 s** (QA round, ADR-0015 — keeps the
   server's stale-seat detector from ever seeing a live member as silent);

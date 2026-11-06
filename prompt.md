@@ -111,3 +111,30 @@ as regressions; real-device matrix written into `docs/testing.md §13b`
 - Transcript line deletion stays local-only (KI-016) and host language
   changes still apply on the next connection (KI-017) — accepted Phase 5
   scope, untouched here.
+
+## 6. QA round v0.6.1 — hello-handshake hardening (2026-11-07, ADR-0017)
+
+The independent QA verification of this phase (Journal, 2026-11-07)
+returned "CONDITIONAL": the compatibility work itself verified clean
+(24/26 live checks, developer smoke reproduced 8/8, frontend 123/123),
+but BUG-601 (HIGH) had to be fixed — after an uplink blackout the client
+could stick in "Reconnecting…" forever (hello sent once per socket, the
+server pong-answered before the handshake, hello-less sockets lived until
+the idle timeout). BUG-602 (LOW) was a stale deployed version string.
+
+Both are closed in v0.6.1. The handshake now saves itself on both sides
+(idempotent re-hello until `ready` + client watchdog; server silence on
+pre-hello pings, idempotent hello re-ack, 15 s hello timeout). Re-measured
+after the fix:
+
+| Check | Result |
+| --- | --- |
+| Backend suite (+4 BUG-601 tests) | **190 passed + 1 xfailed** |
+| Frontend suite (+2 BUG-601 tests) | **125/125**, tsc/ESLint/build clean |
+| `smoke_phase6.mjs` incl. new **M9 blackout-recovery check** | **9/9 PASS** |
+| Regression: `smoke_phase2.mjs` / `smoke_phase5.mjs` | **10/10** / **12/12** |
+| Live E2E: translation | **3/3 PASS** |
+| `/health.version` after redeploy | **0.6.1** |
+
+The real-device matrix (§13b) remains the gate for any hardware claim —
+the M9 recovery row joins it as a human-run step on a real phone.

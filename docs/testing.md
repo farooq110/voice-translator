@@ -413,7 +413,7 @@ against the live :3000 server:
 
 | Check | Result |
 | --- | --- |
-| M1 renders under iPhone emulation | **8/8 PASS** — all checks |
+| M1 renders under iPhone emulation | **9/9 PASS** — all checks (incl. M9, QA round v0.6.1) |
 | M2 manifest linked + served (`short_name=Translator`), `viewport-fit=cover` meta | ✔ |
 | M3 no horizontal overflow at 390 px | ✔ (0 px) |
 | M4 WebSocket connects on emulated mobile | ✔ |
@@ -421,6 +421,7 @@ against the live :3000 server:
 | M6 mic starts from a TAP (touch event, status live) | ✔ |
 | M7 tap stops; only the honest `no_speech_detected` banner (fake-mic tone) | ✔ |
 | M8 backgrounding the tab mid-recording stops the capture with the honest banner (capture guard) | ✔ |
+| M9 uplink blackout (all outgoing frames dropped, held past the pong timeout + one reconnect attempt) → **Connected again** after the link returns — BUG-601 regression, QA round v0.6.1 | ✔ |
 
 Regressions: `smoke_phase2.mjs` **10/10** (solo flow), `smoke_phase5.mjs`
 **12/12** (two participants, guest page already mobile-sized). Backend
@@ -428,6 +429,28 @@ suite green (+7 Phase 6 tests: optional/validated `client.platform`,
 `/health` by_platform aggregation ×2, session stats shape); frontend
 **123/123** (+9: platform mapping, WakeLock acquire/release/OS-drop/deny,
 `resumeIfCreated` never creates a context), tsc/ESLint/build clean.
+
+### 13a-qa. QA round v0.6.1 — hello-handshake hardening (2026-11-07, ADR-0017)
+
+The independent QA verification (Journal, 2026-11-07) found BUG-601: a
+client could stick in "Reconnecting…" forever when the reconnect `hello`
+was lost (hello sent once per socket; server pong-answered before hello;
+no hello timeout). Fixed on both sides (ADR-0017): idempotent re-hello on
+every heartbeat tick until `ready`, client hello-ack watchdog (10 s),
+server stays silent on pre-hello pings, idempotent hello re-ack (fresh
+`ready`, same session/room), server hello timeout (15 s).
+
+Re-verified live (rebuild + redeploy from the branch tip):
+
+| Check | Result |
+| --- | --- |
+| `smoke_phase6.mjs` incl. new **M9 blackout-recovery check** | **9/9 PASS** |
+| `smoke_phase2.mjs` / `smoke_phase5.mjs` (rejoin path shares the reconnect code) | **10/10** / **12/12** |
+| Backend suite (+4 BUG-601 tests: duplicate hello re-acks solo + in-room, pre-hello ping unanswered, hello-timeout close) | **190 passed + 1 xfailed** |
+| Frontend suite (+2: re-hello until ready; watchdog recycles a pong-only socket) | **125/125**, tsc/ESLint/build clean |
+| Live E2E translation (real Whisper + OPUS-MT) | **3/3** |
+| `/health.version` after redeploy | **0.6.1** (BUG-602 hygiene) |
+
 Live: translation E2E 3/3, two-participant E2E 4/4, silence guard PASS.
 
 ### 13b. Real-device matrix — HUMAN run required (KI-004/KI-015/KI-018)
@@ -451,7 +474,8 @@ check the badge shows *Connected*.
 | A4 | Tap the mic again and speak | Recording restarts cleanly, transcript continues |
 | A5 | Play a translated clip (second device or solo fallback), then speak while it plays | Your own speech is ignored while the clip plays (feedback guard), then resumes |
 | A6 | Put the phone screen-off during a 30 s hands-free recording | Speech is still captured (wake lock) OR an honest stop appears — never silent fake "recording" |
-| A7 | Chrome → *Add to Home screen* → launch from the icon | Opens full-screen (standalone), mic works |
+| A7 | With the mic ON, walk into a dead zone (or airplane-mode the Wi-Fi for ~15 s), then return to coverage | Honest *connection lost* banner; within ~30 s of the link returning the badge is *Connected* again without a reload (BUG-601 fix, ADR-0017) |
+| A8 | Chrome → *Add to Home screen* → launch from the icon | Opens full-screen (standalone), mic works |
 
 **B. iPhone Safari**
 
@@ -472,7 +496,8 @@ check the badge shows *Connected*.
 | C1 | Host creates the room, copies the invite link, sends it to the phone | Guest opens the link and sees NO language settings |
 | C2 | Both speak one sentence each (phone loudspeakers, ~50 cm apart) | Each side hears the OTHER's translated voice; nobody hears their own voice echoed |
 | C3 | Guest backgrounds the tab mid-room for ~15 s, returns | Guest rejoins automatically (stale-seat eviction) or retries visibly; host sees *peer left* then *joined* |
-| C4 | Speak OVER the other's audio on purpose | No runaway loop/echo (device AEC + uplink guard) — note the hardware quality |
+| C4 | Host or guest loses coverage for ~15 s mid-room, then regains it | Both sides return to *Connected* without a reload; the room keeps both seats (BUG-601 fix + rejoin path, ADR-0017) |
+| C5 | Speak OVER the other's audio on purpose | No runaway loop/echo (device AEC + uplink guard) — note the hardware quality |
 
 Run `curl -s https://<deployment>/health | jq .sessions.by_platform` after
 the matrix: the tags observed there (e.g. `android-chrome`, `ios-safari`)

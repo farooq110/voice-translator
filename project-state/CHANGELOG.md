@@ -2,6 +2,49 @@
 
 All meaningful project changes. Format based on Keep a Changelog.
 
+## [0.6.1] — QA round: hello-handshake hardening (2026-11-07)
+
+Input: independent QA verification report (Journal, 2026-11-07) — verdict
+"CONDITIONAL" with BUG-601 (HIGH) and BUG-602 (LOW). Fixes per ADR-0017.
+
+### Fixed
+- **BUG-601 (HIGH): the client could stick in "Reconnecting…" forever when
+  the reconnect hello was lost** — exactly the mobile scenario Phase 6
+  targets (Wi-Fi↔LTE transitions, dead zones). Three verified factors: the
+  hello was sent once per socket and never retried; the server answered
+  pings BEFORE hello completed, so the client's pong-based detector never
+  fired; hello-less sockets lived until the 180 s idle timeout. Now the
+  handshake can save itself on both sides: the client repeats hello on
+  every heartbeat tick until `ready` (idempotent re-ack from the server:
+  fresh `ready`, same session and room — the `hello_already_sent` error is
+  gone) and a hello-ack watchdog recycles a socket whose handshake never
+  completes (10 s); the server stays silent on pre-hello pings and closes
+  sockets that never say hello after `ws_hello_timeout_seconds` (15 s,
+  fatal `hello_timeout`). Measured recovery after the link returns: ≈ 5 s
+  (QA acceptance budget: 30 s). Old client + new server and new client +
+  old server both heal — neither combination can wedge.
+- **BUG-602 (LOW, deployment): stale deployment reported**
+  `/health.version = 0.5.1` on a Phase 6 build. No code change needed (the
+  source has carried the right version since the Phase 6 commit); the
+  deploy checklist now asserts `/health.version` after every redeploy
+  (docs/deployment.md §2).
+
+### Added
+- `smoke_phase6.mjs` check **M9** — a real uplink blackout (all outgoing
+  frames dropped) held past the pong timeout and one reconnect attempt,
+  asserting return to Connected after the link returns; the suite is now
+  9 checks.
+- Settings: `ws_hello_timeout_seconds` (default 15 s).
+
+### Tests
+- Backend **190 passed + 1 xfailed** (+4: duplicate hello re-acks solo AND
+  in-room, pre-hello ping unanswered, hello-timeout close).
+- Frontend **125/125** (+2: re-hello until ready; watchdog recycles a
+  pong-only socket), tsc/ESLint/build clean.
+- Live re-verification: smoke_phase6 **9/9**, smoke_phase2 **10/10**,
+  smoke_phase5 **12/12**, E2E translation **3/3**; `/health.version`
+  **0.6.1** after redeploy.
+
 ## [0.6.0] — Phase 6: mobile/browser compatibility (2026-11-06)
 
 Input: master prompt §17 Phase 6 + KI-004/KI-015/KI-018. Scope decision

@@ -11,6 +11,9 @@
  *   - the mic starts and stops from TAP gestures;
  *   - backgrounding the tab stops the recording with an honest banner
  *     (the Phase 6 capture guard) instead of streaming silence;
+ *   - an UPLINK BLACKOUT (every outgoing frame dropped — the dead-zone/
+ *     tunnel analog) recovers to Connected after the link returns, instead
+ *     of sticking in "Reconnecting…" forever (BUG-601 regression);
  *   - the self-reported platform tag reaches the server (/health);
  *   - zero console errors throughout.
  *
@@ -137,6 +140,45 @@ try {
     .waitFor({ timeout: 8_000 })
   check('M8', 'backgrounding the tab stops the capture (honest banner)', true)
   await page.screenshot({ path: path.join(OUT_DIR, 'mobile-background-guard.png') })
+
+  // M9 — BUG-601 regression: black out the UPLINK mid-session (message-level:
+  // every outgoing frame is silently dropped at the JS boundary — the
+  // dead-zone/tunnel analog), hold it past the pong timeout so the client
+  // recycles the socket and its reconnect hello is dropped too, then restore
+  // the link. The handshake must be able to save itself: the repeated hello
+  // reaches the server (idempotent re-ack), the hello-ack watchdog and the
+  // server's hello timeout recycle any dead handshake — the app must reach
+  // Connected again, never stick in "Reconnecting…".
+  await page.evaluate(() => {
+    // M8 left the page emulating 'hidden' — restore it first
+    Object.defineProperty(document, 'visibilityState', {
+      get: () => 'visible',
+      configurable: true,
+    })
+    Object.defineProperty(document, 'hidden', { get: () => false, configurable: true })
+    document.dispatchEvent(new Event('visibilitychange'))
+    if (!window.__wsSendPatched) {
+      const originalSend = WebSocket.prototype.send
+      WebSocket.prototype.send = function (data) {
+        if (window.__uplinkBlackout) return // silently drop every outgoing frame
+        return originalSend.call(this, data)
+      }
+      window.__wsSendPatched = true
+    }
+  })
+  await page.locator('.mic-button').tap()
+  await page.getByText(/Hands-free listening|Push-to-talk recording/).waitFor({ timeout: 10_000 })
+  await page.evaluate(() => {
+    window.__uplinkBlackout = true
+  })
+  // 14 s > pong timeout (10 s): close → reconnect → ITS hello is dropped too
+  await page.waitForTimeout(14_000)
+  await page.evaluate(() => {
+    window.__uplinkBlackout = false
+  })
+  await page.getByText('Connected', { exact: true }).waitFor({ timeout: 30_000 })
+  check('M9', 'uplink blackout → Connected again after the link returns (BUG-601)', true)
+  await page.screenshot({ path: path.join(OUT_DIR, 'mobile-blackout-recovery.png') })
 
   await page.screenshot({ path: path.join(OUT_DIR, 'mobile-home.png') })
 } catch (err) {

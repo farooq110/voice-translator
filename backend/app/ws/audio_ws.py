@@ -42,6 +42,13 @@ Invariants enforced here:
   ORIGINAL captured audio to the peer (never regenerated, never replayed to
   the speaker — feedback-loop prevention). Rooms linger briefly after their
   last member leaves so a dropped connection can rejoin with the same code.
+- QA round v0.6.1 (BUG-601): the handshake must be able to save itself.
+  `ping` is NOT answered before `hello` completes (a pong proves the socket
+  is alive, not the handshake — answering early would silence the client's
+  pong-based dead-connection detector forever); a repeated hello is
+  re-acked idempotently with a fresh `ready` (the client repeats hello
+  until ready arrives); and a socket that never says hello is closed after
+  `ws_hello_timeout_seconds` instead of lingering until the idle timeout.
 """
 
 from __future__ import annotations
@@ -137,6 +144,9 @@ class _Connection:
         self.room: Room | None = None
         self.hello_done = False
         self.closed = False
+        # QA round v0.6.1 (BUG-601): armed at accept, cancelled when hello
+        # completes — closes sockets that never introduce themselves.
+        self.hello_watchdog: asyncio.Task[None] | None = None
         # QA round (BUG-002): monotonic timestamp of the last frame RECEIVED
         # from this client (any text/binary/disconnect). The endpoint loop
         # refreshes it on every message. A seat whose owner has sent nothing
@@ -379,8 +389,17 @@ class _Connection:
             return True
 
         if isinstance(message, HelloMessage):
-            return await self._handle_hello(message)
+            ok = await self._handle_hello(message)
+            if self.hello_done:
+                self.cancel_hello_watchdog()
+            return ok
         if isinstance(message, PingMessage):
+            # BUG-601: a pong proves the SOCKET is alive, not the HANDSHAKE.
+            # Answering pings before hello would let a client whose hello was
+            # lost keep a half-alive socket forever — its pong-based
+            # dead-connection detector would never fire. Stay silent.
+            if not self.hello_done:
+                return True
             ts = message.ts if message.ts is not None else int(time.time() * 1000)
             await self._send(PongEvent(ts=ts))
             return True
@@ -391,9 +410,10 @@ class _Connection:
 
     async def _handle_hello(self, message: HelloMessage) -> bool:
         if self.hello_done:
-            await self.send_error(
-                "hello_already_sent", "Configuration already received for this session."
-            )
+            # BUG-601: the client repeats hello until `ready` arrives (a lost
+            # ready is recovered exactly like a lost hello). Re-ack the same
+            # session and room instead of erroring — idempotent by design.
+            await self._reack_hello()
             return True
 
         config = message.config
@@ -512,6 +532,63 @@ class _Connection:
                 ).model_dump_json(exclude_none=True)
             )
         return True
+
+    async def _reack_hello(self) -> None:
+        """Answer a repeated hello with a fresh `ready` (BUG-601).
+
+        Rebuilt from the stored session state — the handshake already
+        happened; this only recovers a ready event that was lost in transit.
+        """
+        config = self.session.config
+        if config is None:  # defensive: hello_done implies a stored config
+            return
+        room_info = None
+        room = self.room
+        if room is not None and room.config is not None:
+            room_info = RoomInfo(
+                code=room.code,
+                role=self.role,
+                peers=room.peer_count(excluding=self.role),
+                native_language=room.config.native_language,
+                preferred_language=room.config.preferred_language,
+            )
+        await self._send(
+            ReadyEvent(
+                session_id=self.session.id,
+                audio=config.audio,
+                stt=SttInfo.model_validate(self.stt.describe()),
+                room=room_info,
+            )
+        )
+
+    # ------------------------------------------------------- hello watchdog
+
+    def arm_hello_watchdog(self) -> None:
+        """BUG-601: close sockets that never complete the handshake.
+
+        A client that connected but cannot deliver its hello (mobile network
+        transition, dead zone) would otherwise hold a session open until the
+        180 s idle timeout. The client's own watchdog recovers first in the
+        common case; this is the server-side guarantee.
+        """
+        self.hello_watchdog = asyncio.create_task(self._hello_expired())
+
+    def cancel_hello_watchdog(self) -> None:
+        if self.hello_watchdog is not None:
+            self.hello_watchdog.cancel()
+            self.hello_watchdog = None
+
+    async def _hello_expired(self) -> None:
+        await asyncio.sleep(self.settings.ws_hello_timeout_seconds)
+        if self.hello_done or self.closed:
+            return
+        logger.warning("ws.hello_timeout session_id=%s", self.session.id)
+        await self.send_error(
+            "hello_timeout",
+            "No hello received; closing the connection.",
+            fatal=True,
+        )
+        await self.websocket.close(code=CLOSE_POLICY_VIOLATION)
 
     async def _join_room_as_guest(self, config: HelloConfig) -> bool:
         """Guest hello: join the invited room, configure nothing (ADR-0014)."""
@@ -1111,6 +1188,7 @@ async def audio_socket(websocket: WebSocket) -> None:
         rooms=getattr(websocket.app.state, "rooms", None),
     )
     logger.info("ws.open session_id=%s", session.id)
+    conn.arm_hello_watchdog()
 
     try:
         while True:
@@ -1144,6 +1222,7 @@ async def audio_socket(websocket: WebSocket) -> None:
         pass
     finally:
         conn.closed = True
+        conn.cancel_hello_watchdog()
         for task in list(conn._translation_tasks):
             task.cancel()  # cancellation of outdated requests (prompt §10/§15)
         for task in list(conn._tts_tasks):

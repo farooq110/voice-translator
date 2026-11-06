@@ -1,6 +1,6 @@
 # CURRENT_STATE
 
-_Last updated: 2026-11-06 — Phase 6: mobile/browser compatibility implemented + verified (v0.6.0), pending approval_
+_Last updated: 2026-11-07 — QA round v0.6.1: hello-handshake hardening (BUG-601 fixed, BUG-602 closed) — Phase 6 re-verified live_
 
 ## Phase
 
@@ -11,6 +11,20 @@ master prompt §23). Work sits on `main` and is pushed to `main` and the
 `phase-6` branch per the user's delivery instruction (`PHASE-N.md` deep
 dives live ONLY on their own branches; `prompt.md` now documents Phase 6
 and clears the previous phase's record).
+
+**QA round (2026-11-07, ADR-0017, v0.6.1):** the independent QA
+verification (Journal) returned "CONDITIONAL" with BUG-601 (HIGH): a
+client whose reconnect `hello` was lost (mobile dead zone / Wi-Fi↔LTE)
+stuck in "Reconnecting…" forever — hello sent once per socket, the server
+pong-answered before the handshake, and hello-less sockets lived until the
+idle timeout. Fixed on both sides: idempotent re-hello until `ready` +
+hello-ack watchdog on the client; silence on pre-hello pings, idempotent
+hello re-ack (fresh `ready`, same session/room) and a 15 s hello timeout on
+the server. Re-verified live: smoke_phase6 9/9 (new M9 blackout-recovery
+check), smoke_phase2 10/10, smoke_phase5 12/12, backend 190 passed + 1
+xfailed, frontend 125/125, E2E translation 3/3. BUG-602 (stale deployed
+version string) closed by redeployment + a deploy-checklist version
+assertion. Deployment runs v0.6.1.
 
 **QA round (2026-11-05, ADR-0015):** the independent QA verification
 (Journal) blocked acceptance with BUG-001 (deployment had no usable Piper

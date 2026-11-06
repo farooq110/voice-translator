@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     max_utterance_seconds: float = 30.0
     min_utterance_seconds: float = 0.2
     ws_idle_timeout_seconds: float = 180.0
+    # QA round v0.6.1 (BUG-601): sockets that never complete the hello are
+    # closed after this grace period instead of lingering until the idle
+    # timeout — a reconnect attempt whose hello was lost (mobile network
+    # transition) must free the session for the next try.
+    ws_hello_timeout_seconds: float = 15.0
 
     # --- Translation decision engine (Phase 3, ADR-0012) ---
     # `local`  — offline CTranslate2 OPUS-MT models under
