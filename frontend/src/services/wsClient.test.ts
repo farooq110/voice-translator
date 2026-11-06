@@ -234,6 +234,51 @@ describe('TranslatorWsClient', () => {
     expect(client.isReady()).toBe(true)
   })
 
+  it('repeats the hello on heartbeat ticks until ready arrives (BUG-601)', async () => {
+    const { client, statuses } = makeClient()
+    client.connect()
+    const ws = lastSocket()
+    ws.open()
+    await vi.advanceTimersByTimeAsync(0)
+    const hellosAfterOpen = () =>
+      ws.sentJson().filter((msg) => (msg as { type?: string }).type === 'hello').length
+    expect(hellosAfterOpen()).toBe(1)
+
+    // the first hello was lost (mobile network transition) — the next
+    // heartbeat tick must retry it instead of leaving the socket half-alive
+    await vi.advanceTimersByTimeAsync(4_000)
+    expect(hellosAfterOpen()).toBeGreaterThanOrEqual(2)
+
+    // the retry reaches the server → ready → connected
+    ws.serverFrame(READY_EVENT)
+    expect(statuses).toContain('connected')
+    expect(client.isReady()).toBe(true)
+  })
+
+  it('recycles a socket whose handshake never completes (BUG-601 watchdog)', async () => {
+    // old-server world: pongs flow even before hello, so the pong-based
+    // detector never fires — the hello-ack watchdog must recycle the socket
+    const { client, statuses } = makeClient()
+    client.connect()
+    const first = lastSocket()
+    first.open()
+    await vi.advanceTimersByTimeAsync(0)
+
+    await vi.advanceTimersByTimeAsync(4_000) // ping tick: hello retried, ping sent
+    first.serverFrame({ v: 1, type: 'pong', ts: 1 }) // pong WITHOUT ready
+    expect(client.isReady()).toBe(false)
+
+    await vi.advanceTimersByTimeAsync(6_000) // watchdog (10 s after open) fires
+    expect(statuses).toContain('reconnecting')
+    await vi.advanceTimersByTimeAsync(600) // first backoff step
+    const second = lastSocket()
+    expect(second).not.toBe(first)
+    second.open()
+    await vi.advanceTimersByTimeAsync(0)
+    second.serverFrame(READY_EVENT)
+    expect(client.isReady()).toBe(true)
+  })
+
   it('reconnects with capped exponential backoff', async () => {
     const { client } = makeClient()
     client.connect()

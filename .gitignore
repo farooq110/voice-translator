@@ -41,3 +41,4 @@ tool-results/
 
 # --- Platform runtime artifacts (auto-checkpoint guard) ---
 .zscripts/
+frontend/tsconfig.tsbuildinfo

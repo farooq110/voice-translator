@@ -162,6 +162,23 @@ approval record).
 | P6-06 | Human real-device matrix written into `docs/testing.md §13b` (Android Chrome ×7, iPhone Safari ×7 incl. call/Siri interruption, lock screen, silent switch, low-power mode; two-phone room ×4) — the sandbox has no hardware; no claims made until it runs (KI-004/015/018) | DONE (matrix ready; hardware run is human) |
 | P6-07 | Docs: ADR-0016; protocol spec (hello.client + mobile lifecycle obligations §6); testing.md §13; README (status/limitations/roadmap); prompt.md → Phase 6 record; DECISIONS D-018; KNOWN_ISSUES KI-004/015/018 updated; CHANGELOG 0.6.0; CURRENT_STATE; APP_VERSION 0.6.0 | DONE |
 
+## QA round v0.6.1 — hello-handshake hardening — COMPLETE (2026-11-07)
+
+Input: independent QA Journal (2026-11-07) against `phase-6` — verdict
+"CONDITIONAL": BUG-601 (HIGH) must be fixed, BUG-602 (LOW) is hygiene.
+User instruction: "Check QA report and fix the bug and issues. After that
+push updated code in main and phase-6." Fixes per ADR-0017.
+
+| ID | Task | Status |
+| --- | --- | --- |
+| QA6-01 | Client (BUG-601a): repeat `hello` on every heartbeat tick until `ready` arrives (idempotent re-hello — a lost hello is retried within one 4 s interval) | DONE |
+| QA6-02 | Client (BUG-601a): hello-ack watchdog — no `ready` within the pong timeout (10 s) after `onopen` recycles the socket into the normal backoff reconnect (covers old servers that pong-answer before the handshake) | DONE |
+| QA6-03 | Server (BUG-601b/c): `ping` is NOT answered before `hello` completes (a pong proves the handshake, not just the socket); a repeated hello is re-acked idempotently with a fresh `ready` (same session/room; `hello_already_sent` removed); hello-less sockets closed after `ws_hello_timeout_seconds` (15 s) with fatal `hello_timeout` | DONE |
+| QA6-04 | BUG-602: version hygiene — no code defect (source carried the right version since 5c5f2fa); redeploy from the branch tip + deploy-checklist `/health.version` assertion in docs/deployment.md §2 | DONE |
+| QA6-05 | Regression coverage: backend +4 (duplicate hello re-acks solo + in-room, pre-hello ping unanswered, hello-timeout close) → **190 passed + 1 xfailed**; frontend +2 (re-hello until ready, watchdog recycles a pong-only socket) → **125/125**; tsc/ESLint/build clean | DONE |
+| QA6-06 | Live re-verification: `smoke_phase6.mjs` **9/9** with new **M9 uplink-blackout recovery check** (held 14 s past the pong timeout + one reconnect attempt → Connected again; measured ≈ 5 s, budget 30 s); smoke_phase2 **10/10**, smoke_phase5 **12/12** (rejoin path shares the reconnect code); E2E translation **3/3**; `/health.version` **0.6.1** | DONE |
+| QA6-07 | Docs: ADR-0017; protocol spec (handshake re-ack + ping gate + `hello_timeout`, client obligations); testing.md §13a-qa; deployment.md checklist; README roadmap note; KNOWN_ISSUES KI-022/KI-023; DECISIONS D-019; CHANGELOG 0.6.1; CURRENT_STATE; TASKS; APP_VERSION 0.6.1 | DONE |
+
 ## Phase 7+ — see `prompt.md` section 17
 
 Zoom (P7), extension (P8), more apps (P9), production (P10). All `TODO`

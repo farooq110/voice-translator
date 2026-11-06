@@ -11,7 +11,10 @@ import pytest
 from fastapi.testclient import TestClient
 from starlette.testclient import WebSocketDisconnect
 
-from .conftest import FakeSTT, silence_pcm
+from app.config import Settings
+from app.main import create_app
+
+from .conftest import FakeSTT, PassThroughVAD, silence_pcm
 
 HELLO = {
     "v": 1,
@@ -223,14 +226,53 @@ def test_unsupported_sample_rate_is_fatal(client: TestClient) -> None:
         assert err["code"] == "unsupported_sample_rate" and err["fatal"] is True
 
 
-def test_hello_twice_warns(client: TestClient) -> None:
+def test_hello_twice_reacks_ready(client: TestClient) -> None:
+    """BUG-601: a repeated hello is answered with a fresh `ready` for the
+    SAME session instead of an error — the client repeats hello until ready
+    arrives, so a ready event lost in transit must be recoverable."""
     with _open(client) as ws:
         ws.send_json(HELLO)
-        assert ws.receive_json()["type"] == "ready"
+        first = ws.receive_json()
+        assert first["type"] == "ready"
         ws.send_json(HELLO)
-        err = ws.receive_json()
-        assert err["type"] == "error" and err["code"] == "hello_already_sent"
-        assert err["fatal"] is False
+        second = ws.receive_json()
+        assert second["type"] == "ready"
+        assert second["session_id"] == first["session_id"]
+
+
+def test_ping_before_hello_gets_no_pong(client: TestClient) -> None:
+    """BUG-601: a pong proves the handshake, not just the socket. Pings sent
+    before hello are ignored so the client's pong-based dead-connection
+    detector stays armed — after hello, the first frame must be `ready`,
+    never the pong for the pre-hello ping."""
+    with _open(client) as ws:
+        ws.send_json({"v": 1, "type": "ping", "ts": 1})
+        ws.send_json(HELLO)
+        first = ws.receive_json()
+        assert first["type"] == "ready"
+        # and a ping AFTER hello is answered normally
+        ws.send_json({"v": 1, "type": "ping", "ts": 2})
+        assert ws.receive_json()["type"] == "pong"
+
+
+def test_hello_timeout_closes_silent_socket() -> None:
+    """BUG-601: a socket that never says hello is closed after
+    ws_hello_timeout_seconds instead of lingering until the idle timeout —
+    a reconnect attempt whose hello was lost must free its session."""
+    settings = Settings(
+        translation_provider="none",
+        tts_provider="none",
+        ws_hello_timeout_seconds=0.2,
+    )
+    app = create_app(stt=FakeSTT(), vad=PassThroughVAD(), settings=settings)
+    with TestClient(app) as test_client:
+        with test_client.websocket_connect("/ws/audio") as ws:
+            err = ws.receive_json()
+            assert err["type"] == "error" and err["code"] == "hello_timeout"
+            assert err["fatal"] is True
+            with pytest.raises(WebSocketDisconnect):
+                while True:
+                    ws.receive_json()
 
 
 def test_identical_languages_warns_but_connects(client: TestClient) -> None:

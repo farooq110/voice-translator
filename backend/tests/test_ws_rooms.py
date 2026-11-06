@@ -635,3 +635,17 @@ def test_evicted_ghost_cleanup_does_not_eject_the_new_member() -> None:
                 ]
                 assert bogus_lefts == []
                 assert any(e.get("type") == "transcription" for e in events)
+
+
+def test_duplicate_hello_in_room_reacks_with_room_info() -> None:
+    """BUG-601 in the room shape: a repeated host hello (the client repeats
+    it until `ready` arrives) is re-acked with the SAME session and room —
+    never an error, never a second room."""
+    with _app(ScriptedSTT()) as client, _open(client) as host:
+        host.send_json(HOST_HELLO)
+        first = _receive_until(host, "ready")
+        host.send_json(HOST_HELLO)
+        second = _receive_until(host, "ready")
+        assert second["session_id"] == first["session_id"]
+        assert second["room"]["code"] == first["room"]["code"]
+        assert second["room"]["role"] == "host"

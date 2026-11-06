@@ -3,6 +3,10 @@
  *
  * Responsibilities:
  * - connect + `hello` handshake (config read at connect time via callback);
+ *   the hello is REPEATED on every heartbeat tick until `ready` arrives, so
+ *   a hello lost in a mobile network transition cannot deadlock the socket
+ *   (BUG-601) — and a hello-ack watchdog recycles a socket whose handshake
+ *   never completes even when pongs keep flowing;
  * - auto-reconnect with capped exponential backoff (network resilience);
  * - heartbeat ping/pong with timeout → dead connection detection;
  * - typed event delivery (parseServerEvent, runtime-validated);
@@ -71,6 +75,7 @@ export class TranslatorWsClient {
   private ready = false
   private pingTimer: ReturnType<typeof setTimeout> | null = null
   private pongTimer: ReturnType<typeof setTimeout> | null = null
+  private helloTimer: ReturnType<typeof setTimeout> | null = null
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
   private droppedChunks = 0
   /** Phase 4/5: metadata of the most recent `audio` OR `relay` event,
@@ -158,6 +163,7 @@ export class TranslatorWsClient {
       this.ready = true
       this.attempt = 0
       this.clearPongTimer()
+      this.clearHelloTimer()
       this.setStatus('connected')
     }
     if (event_.type === 'pong') {
@@ -214,6 +220,7 @@ export class TranslatorWsClient {
     ws.onopen = () => {
       this.sendJson(helloMessage(this.options.config()))
       this.startPingLoop()
+      this.armHelloWatchdog()
     }
     ws.onmessage = (event: MessageEvent) => {
       if (typeof event.data === 'string') {
@@ -255,6 +262,12 @@ export class TranslatorWsClient {
     const interval = this.options.pingIntervalMs ?? DEFAULT_PING_MS
     this.pingTimer = setInterval(() => {
       if (this.ws === null || this.ws.readyState !== WebSocket.OPEN) return
+      // BUG-601: until `ready` arrives, repeat the hello on every tick. The
+      // hello is sent exactly once per socket otherwise — if it is lost
+      // (Wi-Fi↔LTE transition, dead zone) the socket looks alive (pings/pongs
+      // flow) while the handshake can never complete. The server answers a
+      // repeated hello idempotently with a fresh `ready`.
+      if (!this.ready) this.sendJson(helloMessage(this.options.config()))
       const ts = Date.now()
       this.sendJson(pingMessage(ts))
       // QA round (BUG-002): the pong deadline is armed ONCE per unanswered
@@ -280,11 +293,32 @@ export class TranslatorWsClient {
     }
   }
 
+  /** BUG-601 backstop: if `ready` never arrives, recycle the socket and let
+   * onclose schedule a reconnect. Pongs alone must not keep a half-alive
+   * connection open — with an old server that answers pings before the
+   * handshake, the pong-based detector would never fire on its own. */
+  private armHelloWatchdog(): void {
+    const timeout = this.options.pongTimeoutMs ?? DEFAULT_PONG_TIMEOUT_MS
+    this.helloTimer = setTimeout(() => {
+      if (!this.ready && this.ws !== null && this.ws.readyState === WebSocket.OPEN) {
+        this.ws.close()
+      }
+    }, timeout)
+  }
+
+  private clearHelloTimer(): void {
+    if (this.helloTimer !== null) {
+      clearTimeout(this.helloTimer)
+      this.helloTimer = null
+    }
+  }
+
   private clearTimers(): void {
     if (this.pingTimer !== null) {
       clearInterval(this.pingTimer)
       this.pingTimer = null
     }
     this.clearPongTimer()
+    this.clearHelloTimer()
   }
 }

@@ -459,3 +459,54 @@ Format: description / reproduction / root cause / fix / verification / status.
   close frame is swallowed.
 - **Status:** MITIGATED — production reverse proxies forward close frames;
   re-verify on the Phase 10 production deployment.
+
+## KI-022 — RESOLVED (QA round, BUG-601): client stuck in "Reconnecting…" forever after a lost reconnect hello
+
+- **Description (QA Journal, 2026-11-07):** after an uplink blackout (mobile
+  dead zone / Wi-Fi↔LTE transition) the client could never complete the
+  handshake again — status frozen at "Reconnecting…", mic disabled, only a
+  manual page reload recovered it. Deadlock observed > 50 s (probe
+  abandoned, no recovery).
+- **Reproduction:** connect + start recording → black out the uplink
+  (message-level frame drop) → pong reaper fires (~10 s + 4 s heartbeat),
+  socket closes, honest banner (correct) → reconnect attempt opens a new
+  socket while the link is still black, its hello is dropped → restore the
+  link → the app never reconnects: pings flow, pongs flow, `ready` never
+  comes.
+- **Root cause (three factors, each verified live by QA):** the client sent
+  `hello` exactly once per socket (a lost hello was never retried); the
+  server answered `ping` even BEFORE `hello` completed, so the client's
+  pong-based dead-connection detector never fired; the server kept
+  hello-less sockets open until the 180 s idle timeout.
+- **Fix (ADR-0017, v0.6.1):** client — the hello is repeated on every
+  heartbeat tick until `ready` arrives, and a hello-ack watchdog (10 s)
+  recycles a socket whose handshake never completes even when pongs keep
+  flowing; server — `ping` is not answered before `hello` completes, a
+  repeated hello is re-acked idempotently with a fresh `ready` (same
+  session and room), and a socket that never says hello is closed after
+  `ws_hello_timeout_seconds` (15 s, fatal `hello_timeout`).
+- **Verification:** backend **190 passed + 1 xfailed** (+4: duplicate hello
+  re-acks solo AND in-room with the same session/room, pre-hello ping gets
+  no pong, hello-timeout closes a silent socket); frontend **125/125**
+  (+2: re-hello until ready, watchdog recycles a pong-only socket);
+  `smoke_phase6.mjs` **9/9** — the new M9 check blackouts the uplink for
+  14 s (past the pong timeout + one reconnect attempt) and asserts return
+  to Connected (measured ≈ 5 s after restore, budget 30 s);
+  `smoke_phase2` 10/10 and `smoke_phase5` 12/12 stay green (the rejoin
+  path shares this code).
+- **Status:** RESOLVED (2026-11-07).
+
+## KI-023 — CLOSED (QA round, BUG-602): stale deployment reported /health.version 0.5.1 on a Phase 6 build
+
+- **Description (QA Journal, 2026-11-07):** the deployed preview answered
+  `/health` with `version=0.5.1` while serving Phase 6 features
+  (`sessions.by_platform`, Phase 6 bundle) — a combination no committed
+  tree has. Observational only; all Phase 6 behavior verified functional.
+- **Root cause:** stale/partially synced deployment working tree (the
+  version string in `main.py` did not match the rest of the built code).
+- **Fix:** no code change needed — the source has carried the correct
+  version since 5c5f2fa (0.6.0; 0.6.1 as of this round). Redeploy from the
+  branch tip and assert `/health.version` in the deploy checklist.
+- **Verification:** after rebuild + redeploy for this QA round, `/health`
+  reports **0.6.1**.
+- **Status:** CLOSED (2026-11-07).
