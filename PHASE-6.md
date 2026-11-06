@@ -134,3 +134,35 @@ already gives: a clear message and a stopped mic, never a silent one.
 Phase 6 is the phase where carrying the app in your pocket stopped being a
 -demo and started being the intended use. Next come the meeting rooms —
 that's Phase 7, Zoom first.
+
+## The QA round — the handshake learned to save itself (v0.6.1)
+
+The independent QA pass over this phase came back *conditional*: every
+compatibility behavior above verified clean against the deployed app, with
+one HIGH defect — and it was a good catch, because it sat exactly where
+this phase lives. On a phone, networks don't fail politely. When the
+connection dropped in a dead zone, the app honestly said *connection
+lost* and started reconnecting. But the reconnect's very first `hello`
+traveled into the same dead zone and was never seen again. The client
+only ever said hello once per socket. Worse, the server answered the
+little keep-alive pings even though no hello had ever arrived — so from
+the client's point of view the connection looked *alive*. Pings out,
+pongs back, `Connected` never coming. Forever. Only a manual reload
+escaped.
+
+The fix (v0.6.1, ADR-0017) is one idea: **the handshake must be able to
+save itself.** The client now repeats its hello on every heartbeat tick
+until the server's `ready` arrives, and a watchdog recycles any socket
+whose handshake stalls. The server, for its part, refuses to answer pings
+before the handshake completes — silence is what tells a client its hello
+never landed — re-answers a repeated hello with a fresh `ready` (same
+session, same room), and closes sockets that never introduce themselves
+within 15 seconds. Old app with new server heals; new app with old server
+heals. No combination wedges anymore.
+
+Measured after the fix: the smoke suite gained a ninth check — M9 holds a
+real uplink blackout past the reconnect attempt and asserts the badge
+returns to *Connected* — and it passes, recovery taking about five seconds
+after the link returns (the QA budget was thirty). Backend 190 passed +
+1 xfailed, frontend 125/125, solo and two-person regressions green, and
+`/health` reports 0.6.1 after the redeploy.
