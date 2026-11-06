@@ -35,6 +35,7 @@ client ← {"v":1,"type":"ready","session_id":"s_…","audio":{…},"stt":{…},
 | `room` | string | **Phase 5:** the invite code (4–10 chars `A-Z0-9`). A guest MUST present it; a host may re-send its own code to REJOIN within the linger window. |
 | `native_language` | string | ISO-639-1, e.g. `"ur"` — **host only, required for hosts**. **Pinned as the STT default** (primary subtag, `"ur-PK"` → `"ur"`) — see ADR-0006. Guests send neither language (the room's pair governs — the host's). |
 | `preferred_language` | string | ISO-639-1, e.g. `"en"` — host only, required for hosts. |
+| `client` | object | **Phase 6 (ADR-0016, optional):** `{platform}` — a coarse lowercase tag (2–24 chars `[a-z0-9-]`, e.g. `"ios-safari"`, `"android-chrome"`). Never a raw user-agent string. Purely observational: the server aggregates connected clients into `/health` → `sessions.by_platform`. Older clients omit it; never required; never echoed into `ready`. |
 | `audio.encoding` | `"pcm_s16le"` | only supported value |
 | `audio.sample_rate` | int | must equal 16000 |
 | `audio.channels` | int | must equal 1 |
@@ -327,3 +328,25 @@ capacity, 1001 idle).
   `droppedChunkCount`) — control messages are never dropped.
 - Buffered-but-unflushed audio is **discarded** on disconnect (privacy: no
   unnecessary audio retention).
+
+## 6. Mobile lifecycle obligations (Phase 6, ADR-0016)
+
+- A client MAY include an optional `client.platform` tag in its hello
+  (coarse, lowercase, ≤ 24 chars — e.g. `"ios-safari"`). It is
+  observational only: the server aggregates CONNECTED clients into
+  `/health` → `sessions.by_platform` and forgets it at disconnect.
+- A client whose page is HIDDEN (mobile OS suspends capture + timers)
+  must finalize its recording like a connection loss — stop the capture,
+  flush what it has, clear playback and the uplink guard — instead of
+  streaming silence and tripping the server's idle/stale-seat logic. The
+  reference client stops recording on `visibilitychange → hidden`
+  (banner on return), finalizes quietly on `pagehide`, and re-arms
+  playback on return via a resume that never creates an `AudioContext`.
+- While the microphone is open a client SHOULD hold a Screen Wake Lock
+  when available (a locked phone suspends capture within seconds) and
+  release it when recording stops. Best-effort: denials (low-power mode,
+  unsupported browser) degrade silently.
+- A client must treat a capture `AudioContext` that stops RUNNING
+  mid-recording (iOS `interrupted`, OS audio routing) as an interruption:
+  finalize and surface an honest banner. The reference client watches
+  `statechange` and disarms the watcher on its own stop.

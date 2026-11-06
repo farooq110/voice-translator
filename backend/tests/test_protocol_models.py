@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import pytest
 from pydantic import ValidationError
 
@@ -29,6 +31,28 @@ def test_hello_parses() -> None:
     assert msg.config.native_language == "ur"
     assert msg.config.preferred_language == "en"
     assert msg.config.audio.sample_rate == 16000
+
+
+def test_hello_client_platform_optional() -> None:
+    """Phase 6 (KI-004): `client` is optional — older clients send nothing."""
+    msg = parse_client_message(VALID_HELLO)
+    assert msg.config.client is None
+
+    tagged = copy.deepcopy(VALID_HELLO)
+    tagged["config"]["client"] = {"platform": "ios-safari"}
+    msg = parse_client_message(tagged)
+    assert msg.config.client is not None
+    assert msg.config.client.platform == "ios-safari"
+
+
+@pytest.mark.parametrize(
+    "platform", ["a", "IOS Safari", "-ios", "ios-", "x" * 25, "ios_safari", "iOS-Safari"]
+)
+def test_hello_client_platform_validated(platform: str) -> None:
+    bad = copy.deepcopy(VALID_HELLO)
+    bad["config"]["client"] = {"platform": platform}
+    with pytest.raises(ValidationError):
+        parse_client_message(bad)
 
 
 def test_hello_wrong_version_rejected() -> None:

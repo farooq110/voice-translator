@@ -412,6 +412,10 @@ class _Connection:
             return False
 
         self.role = config.role
+        # Phase 6 (KI-004): remember the self-reported platform tag so /health
+        # can show which device families actually connect. Optional on v1 —
+        # older clients simply leave it out.
+        self.session.platform = config.client.platform if config.client else None
 
         if self.rooms is None:
             # Defensive: no room manager (should never happen) — behave solo.

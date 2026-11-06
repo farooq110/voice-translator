@@ -1,107 +1,109 @@
-# User Manual — AI Voice Translator (two-person sessions)
+# How to use the AI Voice Translator
 
-*This manual belongs to the `phase-5` branch and covers ONLY what this
-branch's code does: everything through the two-participant browser MVP —
-live transcription, translation with spoken output, and ROOMS: an invite
-link, a guest who configures nothing, speaker-labeled transcripts, voices
-that reach only the listener, and original-audio relay for third
-languages. (The mobile lifecycle behaviors of a later phase are NOT in
-this branch.)*
+*This is the user manual for `main` — the current app (v0.6.0). It covers
+only what this branch implements: live transcription, the translation
+decision engine, spoken translations, two-person rooms, and the mobile
+lifecycle behaviors.*
 
 ---
 
-## What this app does
+## Start here (60 seconds)
 
-Two people, one conversation, each hearing the other in their own
-language. The translator user (host) configures a language pair once and
-shares an invite link; the guest opens it and just speaks. Speech is
-recognized, decided upon and voiced entirely on this server — no accounts,
-no installs, no cloud.
+1. Start the server: `bash start.sh` → open `http://localhost:3000`.
+2. Pick **Native language** (what you speak) and **Preferred translation
+   language** (what the other person should hear).
+3. Tap the microphone and talk. Sentences appear in the transcript as you
+   pause; the other side hears them spoken in their language.
+4. To add the second person: press **copy invite link** and send it to
+   them. They open it, allow the microphone, and talk. Done.
 
-## Start here (the host)
+That's the whole loop. The rest of this file explains each part of the
+page and what to do when something looks wrong.
 
-1. `bash start.sh` → open `http://localhost:3000`.
-2. Wait for **Connected**. The room panel shows your **invite code** and a
-   **copy invite link** button.
-3. Pick your **Native** and **Preferred** languages (only you ever do
-   this).
-4. Send the invite link to the other person.
-5. When they open it, the panel flips to **Both participants connected**.
-6. Tap the mic and talk — that's the whole ceremony.
+## The page, top to bottom
 
-## Start here (the guest)
-
-1. Open the link the host sent. Allow the microphone.
-2. You see a short confirmation and the host's language pair — there is
-   deliberately **no language settings panel** for you.
-3. Wait for **Connected**, tap the mic, speak your language.
-4. You hear the host's words spoken in YOUR side's language; the host
-   hears yours in theirs.
-
-## The host page, piece by piece
+### Header
+The app title and a **connection badge**. Recording only unlocks when the
+badge says *Connected*. If it says *Reconnecting…*, the app is already
+retrying — wait for green.
 
 ### Room panel
-Invite code + **copy invite link**. Status: *Waiting for the other
-participant* → *Both participants connected* → back to waiting if they
-leave. The room lingers ~2 minutes after you both leave, so a dropped
-connection can rejoin with the same link; after that the code dies
-honestly (`room not found` → ask for a fresh link).
+Your **invite code** and a **copy invite link** button. The link is the
+only thing the second person needs — no install, no settings on their
+side. Once they join, the panel shows *Both participants connected*; when
+they leave, *Waiting for the other participant* returns.
 
-### Language panel (host only)
-Native + preferred. The room carries YOUR pair to the guest. Changing
-languages applies on the next connection.
+### Your languages (host only)
+Two selectors with hints. The **guest never sees this panel** — the room
+carries your pair to them. Changing languages applies from the next
+connection onward.
 
 ### Microphone panel
-Mic button, truthful status line, level meter, **Hands-free** toggle
-(sentence-per-pause vs push-to-talk), **Spoken translations** toggle,
-**stop voice** while audio plays.
+- **Mic button** — tap to start/stop. Red + pulsing = live.
+- **Status line** — always tells the truth: listening, push-to-talk
+  recording, transcribing, finishing, or why it stopped.
+- **Level meter** — moves with your voice; if it never moves, check the
+  browser's mic device.
+- **Hands-free** — ON cuts sentences at natural pauses while you keep
+  talking; OFF is classic push-to-talk (one press = one transcription).
+- **Spoken translations** — voice output on/off; **stop voice** appears
+  while audio is playing.
 
-### Transcript panel (shared)
-Newest on top; every line shows **whose words they are** (Host/Guest
-chip), the original text with its language, the decision badge
-(`UR → EN`, `pass-through · third language`, …), the translated text, and
-warning chips for per-line translation/voice issues. **✕ deletes a line
-from YOUR screen only** (and stops its audio here).
+### Transcript
+Newest line on top. Every line shows: the original text, detected
+language + confidence, the **decision badge** (`UR → EN`, `pass-through ·
+third language`, `same language`, …), the translated text when produced,
+and per-line warning chips if translation/voice failed (the original text
+is kept). Lines carry a **Host/Guest chip** in rooms. **✕** deletes a line
+from your own screen and stops its audio.
 
-## Who hears what (the routing table)
+## The other person's page (guest view)
 
-| Someone speaks… | The OTHER side gets | The speaker gets |
-| --- | --- | --- |
-| Host's native language | Transcript + spoken voice in the preferred language | Transcript + translation only — never their own voice |
-| Host's preferred language | Transcript + spoken voice in the native language | Same — text only |
-| A third language (e.g. Spanish) | Transcript + the ORIGINAL audio relayed as captured (never machine-spoken) | Transcript + pass-through chip only |
+They open your invite link, allow the microphone, and see: a short
+confirmation, the host's language pair, a mic button and the shared
+transcript. That's all — deliberately. Their translations arrive as voice
+on their device; the host's arrive on the host's. Nobody hears their own
+words translated back at them. A third language (outside the configured
+pair) crosses as the speaker's real voice — relayed audio, never
+machine-spoken.
 
-While the other side's voice plays on your device, your uplink is briefly
-muted (+0.3 s tail) so the room can never fall into a feedback loop —
-speaking over playback may clip your first word; that's the guard working.
+## Speaking rules the app follows
 
-## Connection behavior
+| What is spoken | What the other side gets |
+| --- | --- |
+| Host's native language | Voice in the preferred language |
+| Host's preferred language | Voice in the native language |
+| Any third language | The original audio, relayed untouched |
+| Identical native+preferred settings | Pass-through (no translation needed) |
 
-- Brief drops: both sides reconnect automatically; the host re-attaches to
-  its room, the guest retries its seat (up to ~90 s) while the server
-  frees a stale seat (~12 s after silence).
-- The peer's departure is announced (*peer left*) and their return
-  (*peer joined*) in the room panel and by transcript presence.
-- If your seat was reclaimed after a long unclean drop
-  (`seat_taken`), reload the same link — you'll be rejoined as yourself.
+## On a phone
 
-## Good to know
-
-- A room holds EXACTLY two participants; a third connection gets a clear
-  *room full*.
-- Deleting a line is local to your device; the peer keeps theirs.
-- A reload clears the local transcript (the room itself lives on the
-  server until the linger expires).
-- All voices and models are offline on this server.
+- **Install:** use the browser's *Add to Home Screen*; the app opens
+  full-screen from its icon.
+- **Backgrounding/locking/interrupted by a call:** the recording stops
+  right away with a clear banner (the OS suspends the mic — the app never
+  fakes it). Tap the mic when you're back.
+- **Screen wake:** requested only while the mic is open.
+- The mic panel stays visible while long transcripts scroll; swiping down
+  cannot reload the app mid-recording.
 
 ## Troubleshooting
 
 | Symptom | Meaning → action |
 | --- | --- |
-| Guest sees *room not found* | Code expired or typo → host sends a fresh link. |
-| *room full* on first join | Two people are already inside → only two seats exist. |
-| *Could not rejoin the room…* (after retries) | The linger expired while both were offline → fresh link. |
-| Guest hears nothing | Host may be speaking a third language (relay plays the ORIGINAL voice — check volume), or spoken-translations toggle is off. |
-| Voice on the wrong device | It isn't: voices ONLY ever go to the listener — the speaker sees text. |
-| *no speech detected* | Noise/silence → speak closer to the mic. |
-| Badge stuck on *Connecting…* | Server down → check `start.sh`, reload. |
+| Badge stuck on *Connecting…* | Server down/restarting → check `bash start.sh` output, reload the page. |
+| *no speech detected* | Noise or silence only → speak a little louder/closer. |
+| Level meter flat | Wrong input device → pick the mic in the browser's site settings. |
+| *pass-through · pair unavailable* | The offline MT pair for those languages isn't provisioned → run `backend/scripts/download_translation_models.py`. |
+| Voice never plays | Spoken-translations toggle off, or voices not provisioned → check the toggle and `/health` (`tts.languages`). |
+| *room full* | Two people are already in the room → rooms hold exactly two. |
+| Guest lost the room after a long offline gap | Room expired (~2 min linger) → host sends a fresh link. |
+| *server_busy* notice | That segment was dropped by design under heavy load → keep talking; the next segment is processed normally. |
+
+## Notes
+
+- Everything — recognition, translation, voices — runs on this server;
+  no audio or text goes to any cloud service.
+- Transcripts live only in the page; a reload clears them.
+- Deleting a line is local to your device; the other participant keeps
+  their copy.

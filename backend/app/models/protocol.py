@@ -40,6 +40,17 @@ class AudioFormat(StrictModel):
 _LANG_PATTERN = re.compile(r"^[a-z]{2,3}(-[A-Za-z]{2,8})?$")
 
 
+class ClientInfo(StrictModel):
+    """Optional self-reported client platform (Phase 6, KI-004).
+
+    A coarse lowercase tag such as "ios-safari" or "android-chrome" — never
+    a raw user-agent string. Purely observational: the server aggregates it
+    into /health so the real-device matrix can see which platforms connect.
+    """
+
+    platform: str = Field(min_length=2, max_length=24, pattern=r"^[a-z0-9]+(-[a-z0-9]+)*$")
+
+
 class HelloConfig(StrictModel):
     """Per-connection hello configuration.
 
@@ -55,12 +66,16 @@ class HelloConfig(StrictModel):
 
     `room` is the invite code (host may re-send its own code to rejoin after
     a network drop — the room lingers briefly after its last member leaves).
+
+    `client` (Phase 6, optional) is the self-reported platform tag — absent
+    on older clients and never required.
     """
 
     native_language: str = ""
     preferred_language: str = ""
     role: Literal["host", "guest"] = "host"
     room: str | None = Field(default=None, pattern=r"^[A-Z0-9]{4,10}$")
+    client: ClientInfo | None = None
     audio: AudioFormat
 
     @field_validator("native_language", "preferred_language")

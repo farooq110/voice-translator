@@ -2,6 +2,39 @@
 
 All meaningful project changes. Format based on Keep a Changelog.
 
+## [0.6.0] — Phase 6: mobile/browser compatibility (2026-11-06)
+
+Input: master prompt §17 Phase 6 + KI-004/KI-015/KI-018. Scope decision
+(ADR-0016): everything the CODE controls is implemented and verified under
+full device emulation; everything that needs physical hardware is a written
+step-by-step human matrix — no hardware claims from the sandbox.
+
+### Added
+- **Honest capture lifecycle.** Backgrounding the tab, locking the phone or
+  an incoming call now STOPS the recording the same honest way a connection
+  loss does (buffer flushed, playback and feedback guard cleared) with a
+  plain-language banner — instead of streaming silence behind a fake
+  "recording" state and tripping the server's idle/stale-seat logic. The
+  capture AudioContext watches its own state (iOS `interrupted`).
+- **Screen wake lock** while the mic is open (progressive enhancement;
+  denials degrade silently).
+- **PWA-lite**: manifest + icons + apple metas — installs to a phone home
+  screen; pull-to-refresh can no longer reload the app mid-recording;
+  form controls no longer trigger iOS focus zoom; the mic panel stays
+  reachable on long transcripts; ≥ 44 px touch targets.
+- **Platform telemetry**: optional `hello.config.client.platform` (coarse
+  tag, never a raw user-agent) aggregated into `/health →
+  sessions.by_platform` — the human device matrix gets ground truth.
+
+### Verified
+- Backend 177 passed + 1 xfailed (+7 tests); frontend 123/123 (+9), tsc /
+  ESLint / build clean; `smoke_phase6.mjs` (iPhone emulation) **8/8**
+  including the platform tag end-to-end and the background-tab guard;
+  regressions smoke_phase2 10/10, smoke_phase5 12/12; live E2E translation
+  3/3, two-participant routing 4/4; silence guard PASS.
+- Real-device matrix (Android/iOS/room, ~15 min) documented in
+  docs/testing.md §13b — awaiting the human hardware run.
+
 ## [0.5.1] — QA round: deployment hardening (2026-11-05)
 
 Input: independent QA verification report (Journal, 2026-11-05) — verdict

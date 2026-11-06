@@ -33,6 +33,10 @@ export interface CaptureCallbacks {
   onChunk: (pcm16: ArrayBuffer) => void
   /** Input level (RMS, 0..1) at chunk cadence. */
   onLevel: (rms: number) => void
+  /** Phase 6 (KI-004/015): the capture AudioContext stopped running
+   * mid-recording — iOS reports 'interrupted' (phone call, Siri, control
+   * center), Android can suspend the tab. The caller must finalize. */
+  onStateLost?: () => void
 }
 
 export interface CaptureHandle {
@@ -142,6 +146,19 @@ export async function startMicCapture(callbacks: CaptureCallbacks): Promise<Capt
     source.connect(node)
     node.connect(mute)
     mute.connect(context.destination)
+
+    // Mobile interruption watchdog (Phase 6): the OS can suspend the capture
+    // graph at any moment without closing the stream. Surface it once — the
+    // listener is removed in stop() so our own close never fires it.
+    if (callbacks.onStateLost) {
+      const onStateChange = () => {
+        if (context.state !== 'running') {
+          context.removeEventListener('statechange', onStateChange)
+          callbacks.onStateLost?.()
+        }
+      }
+      context.addEventListener('statechange', onStateChange)
+    }
 
     return {
       contextRate: context.sampleRate,

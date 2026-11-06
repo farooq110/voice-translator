@@ -636,3 +636,40 @@ body {
 .transcript-item--peer {
   border-start-start-radius: 4px;
 }
+
+/* ---------- Phase 6: real-device comfort (KI-004/KI-015) ---------- */
+
+/* Kill pull-to-refresh / rubber-banding: on a phone an accidental swipe
+   used to reload the app mid-recording. Tap highlights stay invisible —
+   the components style their own pressed states. */
+html,
+body {
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (max-width: 640px) {
+  /* iOS zooms any focused control set below 16px — pin the form controls
+     so choosing a language never zooms the viewport. */
+  .field__select,
+  .handsfree input,
+  .playback-toggle input {
+    font-size: 16px;
+  }
+
+  /* Keep the mic reachable on long transcripts: the capture panel follows
+     the scroll, floating above the home-indicator safe area. */
+  .capture-panel {
+    position: sticky;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    z-index: 10;
+    box-shadow: var(--shadow), 0 -8px 24px rgb(13 20 29 / 0.18);
+  }
+
+  /* Comfortable thumb targets for the row of controls under the mic. */
+  .handsfree,
+  .playback-toggle,
+  .stop-voice {
+    min-height: 44px;
+  }
+}
