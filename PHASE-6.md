@@ -166,3 +166,17 @@ returns to *Connected* — and it passes, recovery taking about five seconds
 after the link returns (the QA budget was thirty). Backend 190 passed +
 1 xfailed, frontend 125/125, solo and two-person regressions green, and
 `/health` reports 0.6.1 after the redeploy.
+
+## Re-verified from a clean sandbox (2026-11-07)
+
+The QA round was closed by a full replay: the sandbox wiped every model
+and the SSH toolchain, so everything was re-provisioned and the entire
+battery re-run against this branch's unchanged tip. Backend 190 passed +
+1 xfailed, frontend 125/125 with clean typecheck, lint and build; live:
+translation E2E 3/3, TTS E2E 3/3, two-person E2E 4/4, synthetic 3/3,
+silence guard PASS, smokes 10/10 / 12/12 / 9/9 — the ninth check being
+the blackout-recovery regression — and `/health` still reports 0.6.1.
+A fresh-eyes skim of the handshake paths found nothing to fix: the QA
+Journal has no remaining open findings, and the only open items stay the
+honest ones — the physical-device rows (KI-004/015/018) waiting for a
+human, and the accepted limitations (KI-003/012).
