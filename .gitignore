@@ -45,3 +45,7 @@ frontend/tsconfig.tsbuildinfo
 
 # smoke-script cwd-relative screenshot artifacts
 frontend/docs/
+
+# --- SSH transport (local push auth, never commit) ---
+/.ssh-keys/
+/.ssh-runtime/
