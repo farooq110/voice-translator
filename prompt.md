@@ -138,3 +138,34 @@ after the fix:
 
 The real-device matrix (§13b) remains the gate for any hardware claim —
 the M9 recovery row joins it as a human-run step on a real phone.
+
+## 7. QA round v0.6.2 — device-loss honest stop + permission copy (2026-11-07, ADR-0018)
+
+Input: independent QA verification (Journal, 2026-11-07, against
+`phase-6` @ `7da3752`, deployment v0.6.1) — verdict **PASS WITH
+FINDINGS**. The Journal re-verified the v0.6.1 handshake fixes live
+(BUG-601: 14 s blackout → Connected 0.186 s after recovery, solo and
+room; BUG-602: `/health.version` 0.6.1) and reported two open defects,
+both fixed in v0.6.2:
+
+- **GAP-604 (medium):** microphone device changes were not handled at
+  all (no `devicechange` listener, no `track.onended` handler) — a lost
+  headset/Bluetooth device mid-recording kept a live-looking recording
+  streaming digital silence. Now the capture service watches the track
+  `ended` event (self-removing, exactly-once, own `stop()` disarms
+  first) and the recording is finalized honestly with
+  "Recording stopped — the microphone was disconnected. Tap the mic to
+  continue."
+- **BUG-603 (low):** a denied permission arriving as `NotSupportedError`
+  (WebViews/kiosk builds, the Journal's headless probe) rendered the raw
+  "start failed — Not supported"; now classified as permission guidance:
+  "Microphone access was refused or is unavailable — check site
+  permissions." Verified live with the Journal's exact CDP-denial
+  scenario (`frontend/scripts/probe_bug603_deny.mjs`, 4/4).
+
+Measured after the fix: frontend 139/139 (+14 audioCapture tests),
+backend 190 passed + 1 xfailed, smokes 9/9 / 10/10 / 12/12, live E2E
+translation 3/3, TTS 3/3, two-participant 4/4, synthetic 3/3, silence
+guard PASS, `/health.version` 0.6.2. The human device matrix (§13b)
+gained the device-change rows A9/B8 and remains the gate for any
+hardware claim (KI-004/015/018).

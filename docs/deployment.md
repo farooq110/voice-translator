@@ -27,10 +27,10 @@ What you get on one origin/port:
 | `/ws/audio` | audio WebSocket (protocol v1) |
 | `/health` | JSON health/readiness |
 
-**Deploy checklist (QA round v0.6.1, BUG-602):** after every redeploy,
+**Deploy checklist (QA round v0.6.2):** after every redeploy,
 assert the running build matches the branch tip —
 `curl -fsS localhost:3000/health | grep -o '"version":"…"'` must equal the
-`APP_VERSION` in `backend/app/main.py` (0.6.1 as of this round). A version
+`APP_VERSION` in `backend/app/main.py` (0.6.2 as of this round). A version
 mismatch means the deployment is running a stale/partially synced tree;
 rebuild (`cd frontend && npm run build`) and restart `start.sh` before any
 QA conclusions are drawn from that deployment.

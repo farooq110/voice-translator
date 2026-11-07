@@ -83,6 +83,11 @@ machine-spoken.
 - **Backgrounding/locking/interrupted by a call:** the recording stops
   right away with a clear banner (the OS suspends the mic — the app never
   fakes it). Tap the mic when you're back.
+- **Headset/earbuds disconnect mid-recording (Bluetooth off, cable
+  unplugged):** the recording stops immediately with
+  *Recording stopped — the microphone was disconnected* — the app never
+  keeps a fake "recording" streaming silence. Tap the mic to continue on
+  the new device.
 - **Screen wake:** requested only while the mic is open.
 - The mic panel stays visible while long transcripts scroll; swiping down
   cannot reload the app mid-recording.
@@ -94,6 +99,8 @@ machine-spoken.
 | Badge stuck on *Connecting…* | Server down/restarting → check `bash start.sh` output, reload the page. |
 | *no speech detected* | Noise or silence only → speak a little louder/closer. |
 | Level meter flat | Wrong input device → pick the mic in the browser's site settings. |
+| *Microphone access was refused or is unavailable — check site permissions* | The browser refused the mic (denied permission, or the app's context can't access it) → allow the microphone for this site (padlock icon), then tap the mic again. |
+| *Recording stopped — the microphone was disconnected* | The active mic disappeared mid-recording (Bluetooth turned off / headset unplugged) → tap the mic to continue with the current audio device. |
 | *pass-through · pair unavailable* | The offline MT pair for those languages isn't provisioned → run `backend/scripts/download_translation_models.py`. |
 | Voice never plays | Spoken-translations toggle off, or voices not provisioned → check the toggle and `/health` (`tts.languages`). |
 | *room full* | Two people are already in the room → rooms hold exactly two. |
