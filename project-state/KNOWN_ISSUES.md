@@ -510,3 +510,51 @@ Format: description / reproduction / root cause / fix / verification / status.
 - **Verification:** after rebuild + redeploy for this QA round, `/health`
   reports **0.6.1**.
 - **Status:** CLOSED (2026-11-07).
+
+## KI-024 — RESOLVED (QA round v0.6.2, GAP-604): microphone device changes were not handled — lost mic kept a zombie recording
+
+- **Description (QA Journal, 2026-11-07, medium):** the "Device changes"
+  verify item had no implementation — no `devicechange` listener and no
+  `track.onended` handler anywhere (0 occurrences in the deployed
+  bundle). If the active microphone disappeared mid-recording (unplugged
+  headset, Bluetooth earbud leaving range), the MediaStreamTrack ended
+  while the AudioContext kept running: the statechange watchdog never
+  fired, the UI kept saying "Hands-free listening…", and the app streamed
+  digital silence — the zombie-recording class Phase 6 eliminated for
+  backgrounding.
+- **Fix (ADR-0018):** `startMicCapture` attaches a self-removing `ended`
+  listener to every capture-stream audio track and reports
+  `onStateLost('device_lost')` exactly once; `stop()` disarms the
+  listener before teardown so the app's own close never looks like a
+  device loss. The hook reuses `finalizeRecording()` and shows
+  "Recording stopped — the microphone was disconnected. Tap the mic to
+  continue." A `devicechange` label-refresher was deliberately not added
+  (labels only; Journal marked it optional).
+- **Verification:** unit — track-ended fires exactly once with
+  `device_lost`; own `stop()` never fires it; interruption watchdog still
+  reports `context_interrupted` (audioCapture.test.ts, 14 new tests →
+  frontend 139/139). Live hardware unplug is the new §13b rows A9/B8
+  (human run, KI-004 scope unchanged).
+- **Status:** RESOLVED (2026-11-07, v0.6.2).
+
+## KI-025 — RESOLVED (QA round v0.6.2, BUG-603): denied mic permission showed "start failed — Not supported" in NotSupportedError-flavored environments
+
+- **Description (QA Journal, 2026-11-07, low):** with microphone
+  permission denied, environments whose denial surfaces as
+  `DOMException NotSupportedError` (WebViews/kiosk builds; the Journal's
+  headless CDP probe) showed the raw banner "START FAILED — Not
+  supported" instead of the intended permission guidance. Standard
+  browser denials (`NotAllowedError`) were classified correctly.
+- **Fix (ADR-0018):** `classifyGetUserMediaError` maps
+  `NotSupportedError` to `permission_denied` with neutral guidance —
+  "Microphone access was refused or is unavailable — check site
+  permissions." (it must not claim "denied" — some cases are capability,
+  not consent). Other mappings unchanged.
+- **Verification:** unit — every DOMException name through the public
+  `startMicCapture` path (NotAllowedError, SecurityError, NotFoundError,
+  OverconstrainedError, NotSupportedError, NotReadableError + non-DOM);
+  live probe `frontend/scripts/probe_bug603_deny.mjs` reproduces the
+  Journal's CDP-denial scenario against a live server: **4/4**, banner
+  "PERMISSION DENIED / Microphone access was refused or is unavailable —
+  check site permissions.", no "Not supported" text.
+- **Status:** RESOLVED (2026-11-07, v0.6.2).

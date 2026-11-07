@@ -180,3 +180,40 @@ A fresh-eyes skim of the handshake paths found nothing to fix: the QA
 Journal has no remaining open findings, and the only open items stay the
 honest ones — the physical-device rows (KI-004/015/018) waiting for a
 human, and the accepted limitations (KI-003/012).
+
+## The second QA round — the mic itself learned to say goodbye (v0.6.2)
+
+The Journal came back **PASS WITH FINDINGS**: the reconnection fixes
+held under independent reproduction (a 14-second uplink blackout ended in
+*Connected* 186 milliseconds after the link returned, solo and in a room,
+and the deployment finally stamped the right version), but two defects
+remained — GAP-604 and BUG-603 — and both are closed in v0.6.2
+(ADR-0018).
+
+**GAP-604 (medium):** the "Device changes" verify item had no
+implementation at all. Unplug a headset or let a Bluetooth earbud leave
+range mid-recording and the track ended while the AudioContext kept
+running — the UI kept saying "Hands-free listening…" while the app
+streamed digital silence, the exact zombie-recording failure this phase
+eliminated for backgrounding. The capture service now watches the
+track's `ended` event — a self-removing listener that reports
+`device_lost` exactly once, disarmed before the app's own teardown so a
+deliberate stop can never masquerade as a loss — and the recording is
+finalized through the same `finalizeRecording()` path with the banner
+*Recording stopped — the microphone was disconnected. Tap the mic to
+continue.*
+
+**BUG-603 (low):** a microphone refusal arriving as `NotSupportedError`
+(WebViews, kiosk builds, the Journal's own headless probe) rendered the
+raw "start failed — Not supported". It now classifies as permission
+guidance — *Microphone access was refused or is unavailable — check site
+permissions.* — verified against the live server with the Journal's
+exact CDP-denial scenario (4/4).
+
+Measured after the fix: frontend 139/139 (+14 audioCapture tests — every
+DOMException name, the exactly-once device-loss report, the stop-disarm
+guarantee), backend 190 passed + 1 xfailed, smokes 9/9 / 10/10 / 12/12
+with M9 still green, live E2E 3/3 / 3/3 / 4/4 / 3/3, silence guard PASS,
+and `/health` reports 0.6.2. The human matrix gained the device-change
+rows A9/B8 — unplug a real headset mid-recording and watch the honest
+banner — which stay open until a human runs them, as always.

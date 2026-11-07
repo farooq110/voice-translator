@@ -19,6 +19,7 @@ import {
   MicCaptureError,
   TARGET_SAMPLE_RATE,
   startMicCapture,
+  stateLostBanner,
   type CaptureHandle,
 } from '../services/audioCapture'
 import { TranslatorWsClient, type WsStatus } from '../services/wsClient'
@@ -664,17 +665,14 @@ export function useTranslatorSession(wsUrl: string): SessionState {
     playerRef.current?.resume()
     try {
       const handle = await startMicCapture({
-        onStateLost: () => {
-          // iOS/Android suspended the capture graph mid-recording (phone
-          // call, Siri, OS audio routing). Finalize honestly — the mic may
-          // come back dead even when the context resumes.
+        onStateLost: (reason) => {
+          // The capture died mid-recording: the OS interrupted the audio
+          // graph (phone call, Siri) or the input device disappeared
+          // (unplugged headset, Bluetooth earbud out of range — GAP-604).
+          // Finalize honestly either way; the banner names the cause.
           if (!recordingRef.current) return
           void finalizeRecording()
-          setError({
-            code: 'capture_interrupted',
-            message:
-              'Recording stopped — the phone interrupted the microphone. Tap the mic to continue.',
-          })
+          setError(stateLostBanner(reason))
         },
         onChunk: (chunk) => {
           // Feedback-loop guard (ADR-0014): while the other participant's

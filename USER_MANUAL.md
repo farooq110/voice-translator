@@ -110,6 +110,8 @@ goes to the cloud.
 | *Connection lost — recording stopped…* | Network blip; the app reconnects automatically, then tap the mic. |
 | *Recording stopped — the browser suspended the tab…* | You (or the phone) backgrounded the app. Tap the mic to continue. |
 | *Recording stopped — the phone interrupted the microphone…* | A call/Siri took the mic. Tap the mic when ready. |
+| *Recording stopped — the microphone was disconnected…* | The active mic vanished mid-recording (Bluetooth headset off, cable unplugged). Tap the mic to continue on the current device. |
+| *Microphone access was refused or is unavailable — check site permissions* | The browser refused the mic (denied permission or unavailable) → allow the microphone for this site (padlock icon), then tap the mic again. |
 | *no speech detected* | The server heard no clear speech (noise/silence). Just speak again. |
 | *This room already has two participants* | A third device tried to join — rooms hold exactly two. |
 | *Could not rejoin the room…* | The room expired after both sides dropped. Get a fresh invite link. |

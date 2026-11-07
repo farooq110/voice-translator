@@ -193,6 +193,24 @@ open findings.
 | QAV-03 | Fresh-eyes skim of the v0.6.1 handshake paths (client timer cleanup + watchdog neutralization, server watchdog arm/cancel + `hello_done` race) — no findings; `/health.version` **0.6.1** | DONE |
 | QAV-04 | Docs: testing.md §13a-qa2 re-verification record; CURRENT_STATE; CHANGELOG 0.6.1 note; TASKS | DONE |
 
+## QA round v0.6.2 — device-loss honest stop + permission copy — COMPLETE (2026-11-07)
+
+Input: independent QA Journal (2026-11-07) against `phase-6` @ `7da3752`
+— verdict "PASS WITH FINDINGS": GAP-604 (medium) microphone device
+changes not handled; BUG-603 (low) denied-permission banner misleading.
+User instruction: "Check QA report and fix the bug and issues and defect.
+After that push updated code in main and phase-6." Fixes per ADR-0018.
+
+| ID | Task | Status |
+| --- | --- | --- |
+| QA62-01 | GAP-604: `startMicCapture` attaches a self-removing `ended` listener to the capture stream's audio tracks → `onStateLost('device_lost')` exactly once; `stop()` disarms before teardown so its own close never reads as a device loss | DONE |
+| QA62-02 | GAP-604 client behavior: `onStateLost` gains a reason (`context_interrupted` unchanged); the hook reuses `finalizeRecording()` and shows "Recording stopped — the microphone was disconnected. Tap the mic to continue." via the shared `stateLostBanner()` helper | DONE |
+| QA62-03 | BUG-603: `classifyGetUserMediaError` maps `NotSupportedError` to `permission_denied` with "Microphone access was refused or is unavailable — check site permissions."; other mappings and the `start_failed` default unchanged | DONE |
+| QA62-04 | Regression coverage: `audioCapture.test.ts` (+14) — every DOMException name through the public path, device-lost exactly-once, stop-disarm, interruption watchdog, banner copy → frontend **139/139**; tsc/ESLint/build clean (264.01 kB) | DONE |
+| QA62-05 | Live BUG-603 probe: `frontend/scripts/probe_bug603_deny.mjs` (CDP `Browser.setPermission` denied + fake device) → **4/4**: guidance banner shown, zero "Not supported" text | DONE |
+| QA62-06 | Live re-verification: backend **190 passed + 1 xfailed** (APP_VERSION 0.6.2); smoke_phase6 **9/9** (M9 holds), smoke_phase2 **10/10**, smoke_phase5 **12/12**; E2E translation **3/3** / TTS **3/3** / two-participant **4/4** / synthetic **3/3**; silence guard **PASS**; `/health.version` **0.6.2** | DONE |
+| QA62-07 | Docs: ADR-0018; testing.md §13a-qa3 + §13b device-change rows A9/B8 (per the Journal's regression-test suggestion); KNOWN_ISSUES KI-024/KI-025; DECISIONS D-020; CHANGELOG 0.6.2; CURRENT_STATE; TASKS; deployment checklist version; README roadmap; APP_VERSION 0.6.2 | DONE |
+
 ## Phase 7+ — see `prompt.md` section 17
 
 Zoom (P7), extension (P8), more apps (P9), production (P10). All `TODO`

@@ -2,6 +2,50 @@
 
 All meaningful project changes. Format based on Keep a Changelog.
 
+## [0.6.2] — QA round: device-loss honest stop + permission copy (2026-11-07)
+
+Input: independent QA verification report (Journal, 2026-11-07, against
+`phase-6` @ `7da3752`) — verdict **PASS WITH FINDINGS**: GAP-604 (medium)
+and BUG-603 (low). The Journal also re-verified the v0.6.1 fixes live
+(blackout recovery 0.186 s; `/health.version` 0.6.1). Fixes per ADR-0018.
+
+### Fixed
+- **GAP-604 (medium): microphone device changes were not handled** — no
+  `devicechange`/`track.onended` handling anywhere, so an unplugged
+  headset or Bluetooth earbud leaving range mid-recording ended the track
+  while the AudioContext kept running: the UI kept saying "Hands-free
+  listening…" while the app streamed digital silence (the zombie-recording
+  class Phase 6 eliminated for backgrounding). The capture service now
+  watches the track `ended` event — self-removing listener, reported
+  exactly once as `onStateLost('device_lost')`, the app's own `stop()`
+  disarms first — and the recording is finalized honestly with
+  "Recording stopped — the microphone was disconnected. Tap the mic to
+  continue." (`finalizeRecording()` reused; no parallel state machine.)
+- **BUG-603 (low): denied mic permission showed "start failed — Not
+  supported"** in environments whose denial arrives as
+  `NotSupportedError` (WebViews/kiosk builds; the Journal's headless
+  probe). `classifyGetUserMediaError` now maps it to permission guidance:
+  "Microphone access was refused or is unavailable — check site
+  permissions." Standard denials (`NotAllowedError`) were already correct.
+
+### Tests
+- Frontend **139/139** (+14 `audioCapture.test.ts`: every DOMException
+  name through the public path, device-lost exactly-once, stop-disarm,
+  interruption watchdog unchanged, banner copy pinned), tsc/ESLint/build
+  clean (264.01 kB).
+- Backend **190 passed + 1 xfailed** (client-side fix; APP_VERSION 0.6.2).
+- **BUG-603 live probe** (`frontend/scripts/probe_bug603_deny.mjs`,
+  CDP-denied mic): **4/4** — guidance banner shown, no "Not supported".
+- Live battery: smoke_phase6 **9/9** (M9 holds), smoke_phase2 **10/10**,
+  smoke_phase5 **12/12**; E2E translation **3/3** / TTS **3/3** /
+  two-participant **4/4** / synthetic **3/3**; silence guard **PASS**;
+  `/health.version` **0.6.2**.
+
+### Docs
+- ADR-0018; testing.md §13a-qa3 + §13b device-change rows (A9/B8);
+  KNOWN_ISSUES KI-024/KI-025; DECISIONS D-020; CURRENT_STATE; TASKS;
+  deployment checklist version; README roadmap.
+
 ## [0.6.1] — QA round: hello-handshake hardening (2026-11-07)
 
 Input: independent QA verification report (Journal, 2026-11-07) — verdict

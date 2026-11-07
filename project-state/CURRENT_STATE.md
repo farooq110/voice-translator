@@ -1,6 +1,6 @@
 # CURRENT_STATE
 
-_Last updated: 2026-11-07 — QA round v0.6.1 (BUG-601 fixed, BUG-602 closed) re-verified from a clean sandbox: full battery green, /health.version 0.6.1_
+_Last updated: 2026-11-07 — QA round v0.6.2 (GAP-604 device-loss honest stop, BUG-603 permission copy) fixed and re-verified live; Journal verdict PASS WITH FINDINGS fully cleared_
 
 ## Phase
 
@@ -25,6 +25,21 @@ check), smoke_phase2 10/10, smoke_phase5 12/12, backend 190 passed + 1
 xfailed, frontend 125/125, E2E translation 3/3. BUG-602 (stale deployed
 version string) closed by redeployment + a deploy-checklist version
 assertion. Deployment runs v0.6.1.
+
+**QA round (2026-11-07, ADR-0018, v0.6.2):** the independent QA
+verification (Journal, against `phase-6` @ `7da3752`) returned "PASS WITH
+FINDINGS" with two open defects, both fixed: GAP-604 (medium) — no
+microphone device-change handling, so a lost headset/Bluetooth device
+kept a live-looking recording streaming silence — now the capture service
+watches the track `ended` event, reports `device_lost` exactly once, and
+the recording is finalized with the "microphone was disconnected" banner;
+BUG-603 (low) — `NotSupportedError`-flavored permission denials showed
+the raw "Not supported" text, now mapped to honest access guidance.
+Re-verified live: frontend 139/139 (+14 audioCapture tests), backend 190
+passed + 1 xfailed, BUG-603 CDP-denial probe 4/4, smokes 9/9 / 10/10 /
+12/12, E2E 3/3 / 3/3 / 4/4 / 3/3, silence guard PASS,
+`/health.version` 0.6.2. The Journal's PASS verdicts for the v0.6.1
+handshake fixes (BUG-601 recovery 0.186 s, version stamp) are unchanged.
 
 **QA re-verification (2026-11-07, clean-sandbox replay):** after the
 sandbox wiped the model provisioning, the entire battery was replayed

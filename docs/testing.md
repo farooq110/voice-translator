@@ -475,6 +475,40 @@ accepted limitations (KI-003/012).
 | `smoke_phase6.mjs` incl. M9 blackout-recovery (BUG-601 regression) | **9/9** |
 | `/health.version` | **0.6.1** |
 
+### 13a-qa3. QA round v0.6.2 — device-loss honest stop + permission copy (2026-11-07, ADR-0018)
+
+Input: independent QA verification (Journal, 2026-11-07, against
+`phase-6` @ `7da3752`) — verdict **PASS WITH FINDINGS**: GAP-604 (medium,
+microphone device changes not handled — a lost headset/Bluetooth device
+kept a live-looking recording streaming silence) and BUG-603 (low, a
+denied mic permission rendered as "start failed — Not supported" in
+NotSupportedError-flavored environments). The Journal also re-verified
+BUG-601/BUG-602 live (blackout recovery 0.186 s, `/health.version` 0.6.1).
+
+Fixes (ADR-0018): the capture service now watches the MediaStreamTrack
+`ended` event and reports `onStateLost('device_lost')` exactly once
+(self-removing listener; own `stop()` disarms first), the hook reuses
+`finalizeRecording()` and shows the matching banner; `NotSupportedError`
+from getUserMedia classifies as permission guidance ("Microphone access
+was refused or is unavailable — check site permissions.").
+
+Re-verified live (rebuild + redeploy from the branch tip):
+
+| Check | Result |
+| --- | --- |
+| Frontend suite (+14 audioCapture tests: every DOMException name, device-lost exactly-once, stop-disarm, interruption watchdog, banner copy) | **139/139**, tsc/ESLint/build clean (264.01 kB) |
+| Backend suite (client-side fix; APP_VERSION 0.6.2) | **190 passed + 1 xfailed** |
+| **BUG-603 live probe** (`probe_bug603_deny.mjs`: CDP-denied mic, fake device) | **4/4** — banner "PERMISSION DENIED / Microphone access was refused or is unavailable — check site permissions.", no "Not supported" text |
+| `smoke_phase6.mjs` incl. M9 blackout-recovery (BUG-601 regression) | **9/9** |
+| `smoke_phase2.mjs` / `smoke_phase5.mjs` | **10/10** / **12/12** |
+| Live E2E: translation / TTS / two-participant / synthetic | **3/3 / 3/3 / 4/4 / 3/3** |
+| Silence guard (hallucination guard) | **PASS** |
+| `/health.version` after redeploy | **0.6.2** |
+
+Honest scope: the device-**loss** path is verified by unit simulation
+(mocked track `ended`) — a real Bluetooth unplug mid-recording is the new
+§13b hardware rows (A9/B8); no hardware claim is made.
+
 ### 13b. Real-device matrix — HUMAN run required (KI-004/KI-015/KI-018)
 
 The sandbox has no physical phone, no iOS, and no acoustic room. The
@@ -498,6 +532,7 @@ check the badge shows *Connected*.
 | A6 | Put the phone screen-off during a 30 s hands-free recording | Speech is still captured (wake lock) OR an honest stop appears — never silent fake "recording" |
 | A7 | With the mic ON, walk into a dead zone (or airplane-mode the Wi-Fi for ~15 s), then return to coverage | Honest *connection lost* banner; within ~30 s of the link returning the badge is *Connected* again without a reload (BUG-601 fix, ADR-0017) |
 | A8 | Chrome → *Add to Home screen* → launch from the icon | Opens full-screen (standalone), mic works |
+| A9 | With the mic ON (Bluetooth headset as input), power the headset off mid-recording | Banner: *Recording stopped — the microphone was disconnected*; mic OFF; no silent streaming (GAP-604 fix, ADR-0018) |
 
 **B. iPhone Safari**
 
@@ -510,6 +545,7 @@ check the badge shows *Connected*.
 | B5 | Toggle silent switch; receive a translated clip while ring switch is OFF | Clip is audible (Web Audio obeys the switch — note what you observed) |
 | B6 | Low Power Mode ON, tap mic | Recording either works or shows a clear reason — never a silent failure |
 | B7 | Share → *Add to Home Screen*, launch from icon | Full-screen app; mic works |
+| B8 | With the mic ON (Bluetooth headset/earbuds), turn the headset off mid-recording | Banner: *Recording stopped — the microphone was disconnected*; mic OFF; no silent streaming (GAP-604 fix, ADR-0018) |
 
 **C. Two-phone room check (one Android host + one iPhone guest)**
 
