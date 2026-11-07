@@ -453,6 +453,28 @@ Re-verified live (rebuild + redeploy from the branch tip):
 
 Live: translation E2E 3/3, two-participant E2E 4/4, silence guard PASS.
 
+### 13a-qa2. Clean-sandbox re-verification (2026-11-07, still v0.6.1)
+
+The whole battery was replayed from a wiped sandbox (models
+re-provisioned, venv/node_modules intact) against the unchanged v0.6.1
+tip. Zero defects found — the QA Journal has no remaining open findings;
+the only open KIs are the human hardware runs (KI-004/015/018) and
+accepted limitations (KI-003/012).
+
+| Check | Result |
+| --- | --- |
+| Backend pytest (fresh run, re-provisioned models) | **190 passed + 1 xfailed** (KI-002) |
+| Frontend vitest / tsc / ESLint / build | **125/125** / clean / clean / 263.38 kB |
+| `e2e_translation_check.py` (real Whisper + OPUS-MT) | **3/3** |
+| `e2e_tts_check.py` (real Piper synthesis, es pass-through bypasses TTS) | **3/3** |
+| `e2e_phase5_check.py` (two real participants, routed voice) | **4/4** |
+| `e2e_synthetic_check.py` (real ur transcription) | **3/3** |
+| `silence_guard_check.py` (hallucination guard) | **PASS** |
+| `smoke_phase2.mjs` | **10/10** |
+| `smoke_phase5.mjs` | **12/12** |
+| `smoke_phase6.mjs` incl. M9 blackout-recovery (BUG-601 regression) | **9/9** |
+| `/health.version` | **0.6.1** |
+
 ### 13b. Real-device matrix — HUMAN run required (KI-004/KI-015/KI-018)
 
 The sandbox has no physical phone, no iOS, and no acoustic room. The

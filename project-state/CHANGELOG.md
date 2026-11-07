@@ -45,6 +45,15 @@ Input: independent QA verification report (Journal, 2026-11-07) — verdict
   smoke_phase5 **12/12**, E2E translation **3/3**; `/health.version`
   **0.6.1** after redeploy.
 
+### Re-verified (2026-11-07, clean sandbox)
+- Full battery replayed from a wiped sandbox (models re-provisioned)
+  against the unchanged tip — backend **190 passed + 1 xfailed**, frontend
+  **125/125** + tsc/ESLint/build, live E2E translation **3/3** / TTS
+  **3/3** / two-participant **4/4** / synthetic **3/3**, silence guard
+  **PASS**, smokes **10/10** / **12/12** / **9/9** (M9 blackout recovery).
+  Zero defects; no open findings remain from the QA Journal (docs/testing.md
+  §13a-qa2).
+
 ## [0.6.0] — Phase 6: mobile/browser compatibility (2026-11-06)
 
 Input: master prompt §17 Phase 6 + KI-004/KI-015/KI-018. Scope decision

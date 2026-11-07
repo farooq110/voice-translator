@@ -1,6 +1,6 @@
 # CURRENT_STATE
 
-_Last updated: 2026-11-07 — QA round v0.6.1: hello-handshake hardening (BUG-601 fixed, BUG-602 closed) — Phase 6 re-verified live_
+_Last updated: 2026-11-07 — QA round v0.6.1 (BUG-601 fixed, BUG-602 closed) re-verified from a clean sandbox: full battery green, /health.version 0.6.1_
 
 ## Phase
 
@@ -25,6 +25,17 @@ check), smoke_phase2 10/10, smoke_phase5 12/12, backend 190 passed + 1
 xfailed, frontend 125/125, E2E translation 3/3. BUG-602 (stale deployed
 version string) closed by redeployment + a deploy-checklist version
 assertion. Deployment runs v0.6.1.
+
+**QA re-verification (2026-11-07, clean-sandbox replay):** after the
+sandbox wiped the model provisioning, the entire battery was replayed
+from scratch against the unchanged v0.6.1 tip — backend 190 passed + 1
+xfailed, frontend 125/125 + tsc/ESLint/build clean, live E2E translation
+3/3, TTS 3/3, two-participant 4/4, synthetic 3/3, silence guard PASS,
+smokes 10/10 / 12/12 / 9/9 (M9 blackout recovery, BUG-601 regression),
+`/health.version` 0.6.1. A fresh-eyes skim of the new handshake paths
+found no defects. **Zero open findings remain from the QA Journal**; the
+only open KIs are the human hardware runs (KI-004/015/018) and accepted
+limitations (KI-003/012).
 
 **QA round (2026-11-05, ADR-0015):** the independent QA verification
 (Journal) blocked acceptance with BUG-001 (deployment had no usable Piper
