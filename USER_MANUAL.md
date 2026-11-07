@@ -103,25 +103,37 @@ The same table applies in reverse for what you hear from the guest.
 Speech is decoded, translated and voiced entirely on this server; nothing
 goes to the cloud.
 
-## 6. Messages you might see
+- **Install:** use the browser's *Add to Home Screen*; the app opens
+  full-screen from its icon.
+- **Backgrounding/locking/interrupted by a call:** the recording stops
+  right away with a clear banner (the OS suspends the mic — the app never
+  fakes it). Tap the mic when you're back.
+- **Headset/earbuds disconnect mid-recording (Bluetooth off, cable
+  unplugged):** the recording stops immediately with
+  *Recording stopped — the microphone was disconnected* — the app never
+  keeps a fake "recording" streaming silence. Tap the mic to continue on
+  the new device.
+- **Screen wake:** requested only while the mic is open.
+- The mic panel stays visible while long transcripts scroll; swiping down
+  cannot reload the app mid-recording.
 
 | Message | What it means / what to do |
 | --- | --- |
-| *Connection lost — recording stopped…* | Network blip; the app reconnects automatically, then tap the mic. |
-| *Recording stopped — the browser suspended the tab…* | You (or the phone) backgrounded the app. Tap the mic to continue. |
-| *Recording stopped — the phone interrupted the microphone…* | A call/Siri took the mic. Tap the mic when ready. |
-| *Recording stopped — the microphone was disconnected…* | The active mic vanished mid-recording (Bluetooth headset off, cable unplugged). Tap the mic to continue on the current device. |
-| *Microphone access was refused or is unavailable — check site permissions* | The browser refused the mic (denied permission or unavailable) → allow the microphone for this site (padlock icon), then tap the mic again. |
-| *no speech detected* | The server heard no clear speech (noise/silence). Just speak again. |
-| *This room already has two participants* | A third device tried to join — rooms hold exactly two. |
-| *Could not rejoin the room…* | The room expired after both sides dropped. Get a fresh invite link. |
+| Badge stuck on *Connecting…* | Server down/restarting → check `bash start.sh` output, reload the page. |
+| *no speech detected* | Noise or silence only → speak a little louder/closer. |
+| Level meter flat | Wrong input device → pick the mic in the browser's site settings. |
+| *Microphone access was refused or is unavailable — check site permissions* | The browser refused the mic (denied permission, or the app's context can't access it) → allow the microphone for this site (padlock icon), then tap the mic again. |
+| *Recording stopped — the microphone was disconnected* | The active mic disappeared mid-recording (Bluetooth turned off / headset unplugged) → tap the mic to continue with the current audio device. |
+| *pass-through · pair unavailable* | The offline MT pair for those languages isn't provisioned → run `backend/scripts/download_translation_models.py`. |
+| Voice never plays | Spoken-translations toggle off, or voices not provisioned → check the toggle and `/health` (`tts.languages`). |
+| *room full* | Two people are already in the room → rooms hold exactly two. |
+| Guest lost the room after a long offline gap | Room expired (~2 min linger) → host sends a fresh link. |
+| *server_busy* notice | That segment was dropped by design under heavy load → keep talking; the next segment is processed normally. |
 
-## 7. Good to know
+## Notes
 
-- Deleting a line removes it **from your screen only**.
-- Changing the host's languages applies on the **next connection**.
-- A room lingers ~2 minutes after both leave — rejoin with the same link.
-- The first spoken sentence in a language takes ~1.5 s longer (voice
-  loading); after that it's fast.
-- Keep the tab in the foreground while speaking on a phone — that's the
-  one thing the OS does not let any web app override.
+- Everything — recognition, translation, voices — runs on this server;
+  no audio or text goes to any cloud service.
+- Transcripts live only in the page; a reload clears them.
+- Deleting a line is local to your device; the other participant keeps
+  their copy.
