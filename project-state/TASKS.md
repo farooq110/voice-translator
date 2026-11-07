@@ -179,6 +179,20 @@ push updated code in main and phase-6." Fixes per ADR-0017.
 | QA6-06 | Live re-verification: `smoke_phase6.mjs` **9/9** with new **M9 uplink-blackout recovery check** (held 14 s past the pong timeout + one reconnect attempt → Connected again; measured ≈ 5 s, budget 30 s); smoke_phase2 **10/10**, smoke_phase5 **12/12** (rejoin path shares the reconnect code); E2E translation **3/3**; `/health.version` **0.6.1** | DONE |
 | QA6-07 | Docs: ADR-0017; protocol spec (handshake re-ack + ping gate + `hello_timeout`, client obligations); testing.md §13a-qa; deployment.md checklist; README roadmap note; KNOWN_ISSUES KI-022/KI-023; DECISIONS D-019; CHANGELOG 0.6.1; CURRENT_STATE; TASKS; APP_VERSION 0.6.1 | DONE |
 
+## QA re-verification — clean-sandbox replay (2026-11-07) — COMPLETE
+
+No new QA findings. The sandbox recycle wiped the model provisioning, so
+the entire battery was replayed from scratch against the unchanged v0.6.1
+tip (models re-provisioned) to confirm the QA Journal has no remaining
+open findings.
+
+| ID | Task | Status |
+| --- | --- | --- |
+| QAV-01 | Backend suite fresh run → **190 passed + 1 xfailed** (KI-002 xfail); frontend **125/125** + tsc/ESLint/build clean (bundle 263.38 kB) | DONE |
+| QAV-02 | Live battery: e2e translation **3/3**, TTS **3/3**, two-participant **4/4**, synthetic **3/3**, silence guard **PASS**; smoke_phase2 **10/10**, smoke_phase5 **12/12**, smoke_phase6 **9/9** (M9 blackout recovery = BUG-601 regression) | DONE |
+| QAV-03 | Fresh-eyes skim of the v0.6.1 handshake paths (client timer cleanup + watchdog neutralization, server watchdog arm/cancel + `hello_done` race) — no findings; `/health.version` **0.6.1** | DONE |
+| QAV-04 | Docs: testing.md §13a-qa2 re-verification record; CURRENT_STATE; CHANGELOG 0.6.1 note; TASKS | DONE |
+
 ## Phase 7+ — see `prompt.md` section 17
 
 Zoom (P7), extension (P8), more apps (P9), production (P10). All `TODO`

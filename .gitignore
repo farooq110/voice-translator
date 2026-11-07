@@ -42,3 +42,6 @@ tool-results/
 # --- Platform runtime artifacts (auto-checkpoint guard) ---
 .zscripts/
 frontend/tsconfig.tsbuildinfo
+
+# smoke-script cwd-relative screenshot artifacts
+frontend/docs/
