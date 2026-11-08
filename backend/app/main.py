@@ -32,7 +32,7 @@ from .ws.audio_ws import router as audio_router
 from .ws.backpressure import SttQueue
 from .ws.rooms import RoomManager
 
-APP_VERSION = "0.6.2"
+APP_VERSION = "0.6.3"
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

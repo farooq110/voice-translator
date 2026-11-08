@@ -100,12 +100,15 @@ try {
   await page.getByText('Connected', { exact: true }).waitFor({ timeout: 12_000 })
   check('M4', 'WebSocket connected on emulated mobile', true)
 
-  // M5 — the platform tag reached the server (hello.client → /health)
+  // M5 — the platform tag reached the server (hello.client → /health).
+  // QA round v0.6.3: assert >= 1, not strict equality — the deployment is
+  // shared, sessions from other recent clients can still be counted while
+  // being evicted (QA re-test 2026-11-08 observation).
   const health = await page.request.get(`${BASE_URL}/health`).then((r) => r.json())
   check(
     'M5',
     'self-reported platform tag in /health sessions.by_platform',
-    health?.sessions?.by_platform?.['ios-safari'] === 1,
+    (health?.sessions?.by_platform?.['ios-safari'] ?? 0) >= 1,
     `by_platform=${JSON.stringify(health?.sessions?.by_platform ?? {})}`,
   )
 

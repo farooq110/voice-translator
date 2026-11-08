@@ -197,7 +197,7 @@ list (what is *not* tested yet): [docs/testing.md](docs/testing.md).
 | 3 | Translation decision engine (bidirectional) | **complete** |
 | 4 | TTS + browser playback | **complete** |
 | 5 | Complete browser MVP (two participants) | **complete** |
-| 6 | Mobile/browser compatibility on real devices | **complete** (device emulation verified + human matrix ready; QA-hardened v0.6.2 — reconnect deadlock & mic-loss fixed, ADR-0017/0018) |
+| 6 | Mobile/browser compatibility on real devices | **complete** (device emulation verified + human matrix ready; QA-hardened v0.6.3 — reconnect deadlock, mic-loss, solo speaking-chip & touch-target fixed, ADR-0017/0018) |
 | 7 | Zoom integration (first meeting app) | not started |
 | 8 | Chrome extension / advanced audio | not started |
 | 9 | More meeting apps (one at a time) | not started |

@@ -211,6 +211,13 @@ After that push updated code in main and phase-6." Fixes per ADR-0018.
 | QA62-06 | Live re-verification: backend **190 passed + 1 xfailed** (APP_VERSION 0.6.2); smoke_phase6 **9/9** (M9 holds), smoke_phase2 **10/10**, smoke_phase5 **12/12**; E2E translation **3/3** / TTS **3/3** / two-participant **4/4** / synthetic **3/3**; silence guard **PASS**; `/health.version` **0.6.2** | DONE |
 | QA62-07 | Docs: ADR-0018; testing.md §13a-qa3 + §13b device-change rows A9/B8 (per the Journal's regression-test suggestion); KNOWN_ISSUES KI-024/KI-025; DECISIONS D-020; CHANGELOG 0.6.2; CURRENT_STATE; TASKS; deployment checklist version; README roadmap; APP_VERSION 0.6.2 | DONE |
 
+| QA63-01 | BUG-604: `_synthesize_and_deliver` tags the `audio` event with `_speaker()` — the SAME rule transcription uses (solo = one-person room → local role); wire keys `(speaker, id)` now match, chip renders; room-mode tagging and guard arming untouched | DONE |
+| QA63-02 | BUG-605: `.room-panel__copy` joins the 44 px `min-height` control-row rule in the ≤ 640 px block (ADR-0016 §4 touch target); desktop unchanged | DONE |
+| QA63-03 | Journal observation: smoke M5 asserts `>= 1` for `by_platform["ios-safari"]` instead of strict equality (shared-deployment eviction artifact) | DONE |
+| QA63-04 | Regression coverage: `test_solo_room_keeps_phase4_local_playback_shape` asserts `audio.speaker == transcription.speaker == "host"` → backend **190 passed + 1 xfailed** (HF cache env); frontend **139/139**, tsc/ESLint clean | DONE |
+| QA63-05 | Live re-verification on the redeployed v0.6.3 build: solo TTS speaking chip renders; copy-button height ≥ 44 px at 390 px; `smoke_phase6` **9/9** (M5 robust); `/health.version` **0.6.3** | DONE |
+| QA63-06 | Docs: audio-protocol §3a/§3b speaker rule; testing.md §13a-qa4; KNOWN_ISSUES KI-026/027/028; DECISIONS D-021; CHANGELOG 0.6.3; CURRENT_STATE; TASKS; README roadmap; APP_VERSION 0.6.3 (+ frontend package/lockfile) | DONE |
+
 ## Phase 7+ — see `prompt.md` section 17
 
 Zoom (P7), extension (P8), more apps (P9), production (P10). All `TODO`

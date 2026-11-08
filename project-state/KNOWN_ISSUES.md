@@ -558,3 +558,63 @@ Format: description / reproduction / root cause / fix / verification / status.
   "PERMISSION DENIED / Microphone access was refused or is unavailable —
   check site permissions.", no "Not supported" text.
 - **Status:** RESOLVED (2026-11-07, v0.6.2).
+
+---
+
+## KI-026 — RESOLVED (QA round v0.6.3, BUG-604): solo mode — the per-line "speaking" chip never rendered during TTS playback
+
+- **Description (QA Journal (2), 2026-11-08, low):** in solo mode (no
+  invite code) the transcript line that owned the currently-playing TTS
+  clip never showed its `chip--speaking` indicator (polled 150 ms for
+  35 s across 5 delivered clips); audio itself played and the header
+  "stop voice" control appeared — only the per-line indicator was dead.
+  Room mode was unaffected.
+- **Reproduction:** solo, default languages, speak English so a
+  translation + TTS fires; watch the transcript line during playback.
+- **Root cause (wire-captured by the Journal):** the solo `audio` event
+  shipped `speaker: null` (`AudioEvent speaker = role only when
+  cross_participant`) while the solo `transcription` event for the same
+  utterance carries `speaker: "host"` (every session lives in a room; a
+  solo session is a one-person room, so `_speaker()` returns the role).
+  The client builds playback and transcript keys with the
+  speaker-sensitive `lineKey()` — `"c_0001…"` vs `"host:c_0001…"` — so
+  `activeId` could never equal any entry key.
+- **Fix (Journal option (a), backend):** `_synthesize_and_deliver` tags
+  the `audio` event with `_speaker()` — the SAME rule transcription
+  uses. Cross-participant delivery is unchanged (role either way); own
+  TTS still never arms the feedback guard (`meta.speaker !== role` stays
+  false in solo).
+- **Verification:** backend wire test `test_solo_room_keeps_phase4_local_
+  playback_shape` now asserts `audio.speaker == transcription.speaker ==
+  "host"` (the matching-keys regression the Journal requested); room-mode
+  speaker tests unchanged and green (190 passed + 1 xfailed); live: the
+  chip renders for the playing line during solo TTS on the redeployed
+  v0.6.3 build.
+- **Status:** RESOLVED (2026-11-08, v0.6.3).
+
+## KI-027 — RESOLVED (QA round v0.6.3, BUG-605): "copy invite link" button was 31 px tall at mobile widths — below the 44 px touch-target standard
+
+- **Description (QA Journal (2), 2026-11-08, low):** at viewports ≤ 640 px
+  (measured 390 px) `.room-panel__copy` measured 31×114 px — the only
+  control in the responsive sweep below the 44 px hit-target standard
+  ADR-0016 §4 itself set.
+- **Fix:** `.room-panel__copy` joins the 44 px `min-height` control-row
+  rule in the ≤ 640 px block of `frontend/src/app.css` (desktop layout
+  untouched — the rule is mobile-only).
+- **Verification:** touch-target sweep at 390 px — all button/select
+  heights ≥ 44 px on the redeployed v0.6.3 build; desktop (1440 px)
+  layout unchanged; responsive overflow checks still 0 px at
+  320/390/768/1440.
+- **Status:** RESOLVED (2026-11-08, v0.6.3).
+
+## KI-028 — CLOSED (Journal observation, not a defect): smoke M5 strict platform-count equality is brittle on a shared deployment
+
+- **Description (QA Journal (2), 2026-11-08):** `smoke_phase6.mjs` M5
+  asserted `sessions.by_platform["ios-safari"] === 1` exactly. On the
+  shared live server, sessions from other recent clients can still be
+  counted while being evicted (it reported `ios-safari: 3` this round),
+  so the strict equality fails although the platform-tag mechanism
+  works.
+- **Resolution:** M5 now asserts `>= 1` for the specific tag (the
+  mechanism check it always meant to be); the failure class cannot recur.
+- **Status:** CLOSED (2026-11-08, v0.6.3).

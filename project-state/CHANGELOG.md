@@ -2,6 +2,47 @@
 
 All meaningful project changes. Format based on Keep a Changelog.
 
+## [0.6.3] — QA round: solo speaking chip + 44 px touch target (2026-11-08)
+
+Input: independent QA re-test (Journal (2), 2026-11-08, against
+`phase-6` @ `69941d1`, deployment v0.6.2) — verdict **PASS WITH
+FINDINGS**: all four previous defects verified fixed live (BUG-601
+blackout recovery 1.79 s, BUG-602, GAP-604, BUG-603); two NEW
+low-severity defects reported and fixed in v0.6.3.
+
+### Fixed
+- **BUG-604 (low): solo mode — the per-line "speaking" chip never
+  rendered during TTS playback.** Root cause (wire-captured by the
+  Journal): the solo `audio` event shipped WITHOUT a `speaker` tag while
+  the solo `transcription` event for the same utterance carries the role
+  (`"host"` — every session lives in a room; solo is a one-person room).
+  The client keys playback and transcript lines by `(speaker, id)`, so
+  the keys could never match and `entry.key === speakingId` was never
+  true. Fix (backend, per the Journal's option (a)): the `audio` event
+  now uses the SAME speaker-tag rule as transcription (`_speaker()` —
+  the connection's role); room-mode tagging is unchanged (role either
+  way) and own TTS still never arms the remote-playback guard (the tag
+  equals the local role). Regression coverage: the solo-room wire test
+  now asserts `audio.speaker == transcription.speaker == "host"` (the
+  matching-keys rule the Journal asked for).
+- **BUG-605 (low): the "copy invite link" button measured 31 px tall at
+  mobile widths** — the only control below the 44 px touch-target
+  standard ADR-0016 §4 itself set. Fix: `.room-panel__copy` joins the
+  44 px `min-height` control-row rule in the ≤ 640 px block; desktop
+  layout unchanged.
+- **M5 smoke assertion hardened (Journal observation, not a defect):**
+  `smoke_phase6.mjs` asserted `sessions.by_platform["ios-safari"] === 1`
+  exactly — on the shared live server, sessions from other recent
+  clients can still be counted while being evicted (it reported 3 this
+  round). Now asserts `>= 1` for the specific tag.
+
+### Verification
+Backend **190 passed + 1 xfailed** (with the project HF cache; the solo
+wire test updated to the BUG-604 contract), frontend **139/139**,
+tsc/ESLint clean, `/health.version` **0.6.3**; live re-verification:
+solo TTS speaking chip renders, copy-button height ≥ 44 px at 390 px,
+`smoke_phase6` **9/9** (M5 now robust on a shared deployment).
+
 ## [0.6.2] — QA round: device-loss honest stop + permission copy (2026-11-07)
 
 Input: independent QA verification report (Journal, 2026-11-07, against
