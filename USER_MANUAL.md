@@ -137,3 +137,11 @@ goes to the cloud.
 - Transcripts live only in the page; a reload clears them.
 - Deleting a line is local to your device; the other participant keeps
   their copy.
+
+## Changelog of this manual (v0.6.3)
+
+- The per-line **speaking** chip now also lights up in solo mode while a
+  translated sentence is being spoken (before, only the room mode showed
+  it).
+- The **copy invite link** button is now a comfortable thumb target
+  (44 px tall) on phones, like every other control.

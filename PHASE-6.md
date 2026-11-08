@@ -217,3 +217,44 @@ with M9 still green, live E2E 3/3 / 3/3 / 4/4 / 3/3, silence guard PASS,
 and `/health` reports 0.6.2. The human matrix gained the device-change
 rows A9/B8 — unplug a real headset mid-recording and watch the honest
 banner — which stay open until a human runs them, as always.
+## The third QA round — the transcript learned when the voice is speaking (v0.6.3)
+
+The re-test Journal (2026-11-08, against `phase-6` @ `69941d1`,
+deployment v0.6.2) came back **PASS WITH FINDINGS** — and the findings
+list was the best kind: every previous defect verified fixed under
+independent reproduction (a 14-second uplink blackout now ends in
+*Connected* 1.79 seconds after the link returns; the disconnected-mic
+banner and the honest permission guidance both reproduced exactly), with
+two new low-severity defects and one test-hardening observation, all
+addressed in v0.6.3.
+
+**BUG-604 (low):** in solo mode the per-line *speaking* chip never lit
+up while the synthesized clip played — the audio arrived, the header
+"stop voice" control appeared, but the transcript line stayed inert.
+The Journal wire-captured the root cause: the solo `audio` event shipped
+without a `speaker` tag while the solo `transcription` for the same
+utterance carries `host` (every session lives in a room — a solo session
+is a one-person room). Clients key lines by `(speaker, id)`, so the two
+keys could never meet. Fixed on the wire, where the inconsistency was:
+the `audio` event now uses the same speaker-tag rule as the transcript.
+Room mode is untouched, and own TTS still never arms the feedback guard.
+
+**BUG-605 (low):** the invite row's "copy invite link" button measured
+31 px tall at phone widths — the one control in the whole responsive
+sweep below the 44 px touch-target standard this phase wrote into its
+own ADR. It now sits in the same 44 px control-row rule; desktop layout
+unchanged.
+
+**The observation:** the smoke's M5 check asserted the emulated platform
+tag appears in `/health` with exact count 1 — brittle on a shared
+server, where sessions from other recent clients linger in the counters
+(it saw 3 this round). It now asserts what it always meant: at least one.
+
+Measured after the fix: backend 190 passed + 1 xfailed (the solo wire
+test now pins the matching-keys contract the Journal asked for),
+frontend 139/139, tsc/ESLint clean, `probe_qa63_fixes.mjs` 5/5 against
+the redeployed build (chip renders; on the wire `audio.speaker` equals
+the transcription's `host`), smokes 9/9 / 10/10 / 12/12, `/health`
+reports 0.6.3. The honest-boundary line did not move: emulation is
+still emulation, and the human device matrix remains the only gate to
+hardware claims (KI-004/015/018).
