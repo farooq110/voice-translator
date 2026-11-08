@@ -208,8 +208,10 @@ class _Connection:
     # ------------------------------------------------------------- routing
 
     def _speaker(self) -> str | None:
-        """`speaker` tag for events in room mode; None keeps the exact
-        Phase 1–4 solo wire shape."""
+        """`speaker` tag for transcript AND audio events of this connection
+        (QA round v0.6.3, BUG-604: audio now tags like transcription so the
+        client's line keys match in solo rooms too); None only for the
+        never-roomed legacy path."""
         return self.role if self.room is not None else None
 
     def _effective_config(self) -> HelloConfig | None:
@@ -1076,6 +1078,13 @@ class _Connection:
             # Phase 5 (ADR-0014): audio is routed to the OTHER participant
             # (never back to the speaker); a solo room falls back to the
             # speaker — the exact Phase 1–4 local-playback behavior.
+            # QA round v0.6.3 (BUG-604): the speaker tag now ALWAYS uses
+            # _speaker() — the same rule the TranscriptionEvent for this
+            # utterance uses. In a solo room the tag was None while the
+            # transcript carried the role ("host"), so the client's
+            # speaker-sensitive line keys disagreed and the per-line
+            # "speaking" chip never lit up. Cross-participant delivery is
+            # unchanged (role either way).
             meta_json = AudioEvent(
                 id=utterance_id,
                 language=language,
@@ -1084,7 +1093,7 @@ class _Connection:
                 duration_ms=outcome.audio_duration_ms,
                 synthesis_ms=outcome.duration_ms,
                 provider=outcome.provider,
-                speaker=self.role if cross_participant else None,
+                speaker=self._speaker(),
             ).model_dump_json(exclude_none=True)
             logger.info(
                 "ws.audio session_id=%s id=%s bytes=%d synthesis_ms=%d recipients=%d cross=%s",

@@ -157,10 +157,11 @@ rules to the resolved detection:
 **Room mode (Phase 5, ADR-0014):** the rules are applied against the ROOM's
 pair (the host's config) for BOTH participants — the guest configures
 nothing. `transcription` and `translation` events carry an optional
-`speaker: "host"|"guest"` (present only in room mode; solo connections keep
-the exact Phase 1–4 shape) and are BROADCAST to every room member — both
-sides see the whole conversation. Utterance ids are unique per CONNECTION:
-clients key entries by `(speaker, id)`.
+`speaker: "host"|"guest"` — the CONNECTION's role (since Phase 5 every
+session lives in a room; a solo session is a one-person room, so solo
+events carry the local role, e.g. `"host"`) — and are BROADCAST to every
+room member — both sides see the whole conversation. Utterance ids are
+unique per CONNECTION: clients key entries by `(speaker, id)`.
 
 A `translate` decision is executed inside bounded limits (sliding-window 30
 translations/min, ≤2 concurrent, 8 s timeout, dedicated worker thread) and
@@ -187,7 +188,7 @@ synthesized OFFLINE (Piper neural voices, no GPU, no keys) and delivered as
 TWO frames in order:
 
 ```json
-{"v":1,"type":"audio","id":"c_0001_ab12cd","language":"en",
+{"v":1,"type":"audio","id":"c_0001_ab12cd","speaker":"host","language":"en",
  "encoding":"pcm_s16le","sample_rate":22050,"channels":1,
  "bytes":113664,"duration_ms":2577,"synthesis_ms":546,"provider":"piper"}
 ```
@@ -201,6 +202,14 @@ frames without pending metadata).
 Rules:
 
 - `id` equals the `transcription`/`translation` id for the same utterance.
+- `speaker` (QA round v0.6.3, BUG-604) follows the SAME rule as the
+  `transcription` event — the connection's role (`"host"`/`"guest"`; a
+  solo session is a one-person room, so its own TTS is tagged with the
+  local role). Clients key playback to the transcript line by
+  `(speaker, id)`; because the tag equals the local role in solo, own
+  TTS never arms the remote-playback guard. Before v0.6.3 solo audio
+  shipped untagged while the transcript carried the role — the per-line
+  "speaking" chip could never match (BUG-604).
 - Only `translate` decisions produce audio — **original pass-through is
   NEVER regenerated with TTS** (master prompt §17).
 - Synthesis is bounded like translation: sliding-window 30/min, ≤1

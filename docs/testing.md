@@ -509,6 +509,40 @@ Honest scope: the device-**loss** path is verified by unit simulation
 (mocked track `ended`) — a real Bluetooth unplug mid-recording is the new
 §13b hardware rows (A9/B8); no hardware claim is made.
 
+### 13a-qa4. QA round v0.6.3 — solo speaking chip + touch target (2026-11-08)
+
+Input: independent QA re-test (Journal (2), 2026-11-08, against
+`phase-6` @ `69941d1`, deployment v0.6.2) — verdict **PASS WITH
+FINDINGS**: all four previous defects verified fixed live (BUG-601
+blackout → Connected in 1.79 s; BUG-602; GAP-604 device-loss banner;
+BUG-603 permission copy). Two NEW low-severity defects, both fixed:
+
+- **BUG-604 (low):** solo mode — the per-line "speaking" chip never
+  rendered during TTS playback. Root cause (wire-captured): the solo
+  `audio` event shipped without a `speaker` tag while the solo
+  `transcription` carried `"host"`; the client keys lines by
+  `(speaker, id)` so the keys could never match. Fix (backend, Journal
+  option (a)): the `audio` event uses the same `_speaker()` rule —
+  matching keys, room mode unchanged, guard arming unchanged.
+- **BUG-605 (low):** the "copy invite link" button measured 31 px tall
+  at 390 px — below the 44 px touch-target standard (ADR-0016 §4).
+  Fix: `.room-panel__copy` joins the 44 px control-row rule in the
+  ≤ 640 px block.
+
+Plus the Journal's observation (not a defect): smoke M5 strict platform
+equality is brittle on a shared deployment → now asserts `>= 1`.
+
+Re-verified (rebuild + redeploy from the branch tip):
+
+| Check | Result |
+| --- | --- |
+| Backend suite (wire test updated to the BUG-604 matching-keys contract) | **190 passed + 1 xfailed** |
+| Frontend suite (no client change; CSS + smoke script only) | **139/139**, tsc/ESLint clean |
+| **BUG-604 live probe**: solo speech → TTS plays, `chip--speaking` renders on the owning transcript line | **PASS** |
+| **BUG-605 live probe**: `.room-panel__copy` height at 390 px | **≥ 44 px** (was 31 px) |
+| `smoke_phase6.mjs` full battery (M1–M9, M5 hardened) | **9/9** |
+| `/health.version` | **0.6.3** |
+
 ### 13b. Real-device matrix — HUMAN run required (KI-004/KI-015/KI-018)
 
 The sandbox has no physical phone, no iOS, and no acoustic room. The

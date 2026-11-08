@@ -169,3 +169,35 @@ translation 3/3, TTS 3/3, two-participant 4/4, synthetic 3/3, silence
 guard PASS, `/health.version` 0.6.2. The human device matrix (§13b)
 gained the device-change rows A9/B8 and remains the gate for any
 hardware claim (KI-004/015/018).
+
+## 8. QA round v0.6.3 — solo speaking chip + touch target (2026-11-08)
+
+Input: independent QA re-test (Journal (2), 2026-11-08, against
+`phase-6` @ `69941d1`, deployment v0.6.2) — verdict **PASS WITH
+FINDINGS**: 4/4 previous defects verified fixed live (BUG-601: a 14 s
+uplink blackout recovers to Connected in 1.79 s; BUG-602; GAP-604;
+BUG-603). Two new low-severity defects, both fixed in v0.6.3:
+
+- **BUG-604 (low):** solo mode — the per-line "speaking" chip never
+  rendered during TTS playback. The solo `audio` event shipped without
+  a `speaker` tag while the solo `transcription` for the same utterance
+  carries `"host"` (every session lives in a room; solo is a one-person
+  room). Clients key lines by `(speaker, id)` — the keys could never
+  match. Fixed on the wire (Journal option (a)): the `audio` event now
+  uses the same `_speaker()` rule as transcription; room-mode tagging
+  and feedback-guard arming are unchanged.
+- **BUG-605 (low):** the "copy invite link" button measured 31 px tall
+  at mobile widths — the only control below the 44 px touch-target
+  standard ADR-0016 §4 sets. `.room-panel__copy` now joins the 44 px
+  `min-height` rule in the ≤ 640 px block; desktop layout unchanged.
+- **Journal observation (not a defect):** smoke M5 asserted
+  `by_platform["ios-safari"] === 1` exactly — brittle on a shared
+  deployment (other clients' sessions count while being evicted; it
+  reported 3). Now asserts `>= 1`.
+
+Measured after the fix: backend **190 passed + 1 xfailed**, frontend
+**139/139**, tsc/ESLint clean, `smoke_phase6` **9/9** (M5 hardened),
+BUG-604 chip probe **PASS**, BUG-605 height probe **≥ 44 px**,
+`/health.version` **0.6.3**. Real-device scope is unchanged — the human
+device matrix (§13b) remains the gate for any hardware claim
+(KI-004/015/018).

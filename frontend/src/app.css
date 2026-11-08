@@ -666,10 +666,14 @@ body {
     box-shadow: var(--shadow), 0 -8px 24px rgb(13 20 29 / 0.18);
   }
 
-  /* Comfortable thumb targets for the row of controls under the mic. */
+  /* Comfortable thumb targets for the row of controls under the mic.
+     QA round v0.6.3 (BUG-605): the invite "copy" button is part of the
+     touch surface too — it measured 31 px tall at 390 px, below the
+     44 px standard (ADR-0016 §4). */
   .handsfree,
   .playback-toggle,
-  .stop-voice {
+  .stop-voice,
+  .room-panel__copy {
     min-height: 44px;
   }
 }

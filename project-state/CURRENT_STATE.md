@@ -1,6 +1,6 @@
 # CURRENT_STATE
 
-_Last updated: 2026-11-07 — QA round v0.6.2 (GAP-604 device-loss honest stop, BUG-603 permission copy) fixed and re-verified live; Journal verdict PASS WITH FINDINGS fully cleared_
+_Last updated: 2026-11-08 — QA round v0.6.3 (BUG-604 solo speaking chip, BUG-605 touch target, M5 hardening) fixed and re-verified live; re-test Journal verdict PASS WITH FINDINGS fully cleared_
 
 ## Phase
 
@@ -51,6 +51,23 @@ smokes 10/10 / 12/12 / 9/9 (M9 blackout recovery, BUG-601 regression),
 found no defects. **Zero open findings remain from the QA Journal**; the
 only open KIs are the human hardware runs (KI-004/015/018) and accepted
 limitations (KI-003/012).
+
+**QA re-test round (2026-11-08, v0.6.3):** the independent QA re-test
+(Journal (2), against `phase-6` @ `69941d1`, deployment v0.6.2) returned
+"PASS WITH FINDINGS" — all four previous defects verified fixed live
+(BUG-601: a 14 s uplink blackout recovers to Connected in 1.79 s) — and
+reported two new low-severity defects, both fixed: BUG-604 — the solo
+per-line "speaking" chip never rendered because the solo `audio` event
+shipped without a `speaker` tag while the transcript carried `"host"`
+(the client keys lines by `(speaker, id)`); the audio event now uses the
+same `_speaker()` rule as transcription (room mode unchanged, guard
+arming unchanged) — and BUG-605 — the "copy invite link" button measured
+31 px at 390 px, below the 44 px touch-target standard; it joins the
+44 px mobile control-row rule. The Journal's M5 observation (strict
+platform-count equality is brittle on a shared deployment) is fixed in
+the smoke script (`>= 1`). Re-verified live: backend 190 passed + 1
+xfailed, frontend 139/139, smokes 9/9, chip + height probes PASS,
+`/health.version` 0.6.3.
 
 **QA round (2026-11-05, ADR-0015):** the independent QA verification
 (Journal) blocked acceptance with BUG-001 (deployment had no usable Piper

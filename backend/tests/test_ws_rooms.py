@@ -369,19 +369,25 @@ def test_confident_third_language_is_unsupported_pass_through() -> None:
 
 def test_solo_room_keeps_phase4_local_playback_shape() -> None:
     """A host with no guest yet hears its own translation — the exact
-    Phase 1–4 behavior (no `speaker` tag, no relay, audio to self)."""
+    Phase 1–4 behavior (no relay, audio to self).
+
+    QA round v0.6.3 (BUG-604): the solo AUDIO event now carries the same
+    `speaker` tag as the solo TRANSCRIPTION event ("host"), so the client's
+    speaker-sensitive line keys match and the per-line "speaking" chip
+    renders. The tag equals the connection's own role — the feedback guard
+    (armed only when meta.speaker differs from the local role) stays off.
+    """
     stt = ScriptedSTT([("ur", 0.97)])
     with _app(stt) as client, _open(client) as host:
         host.send_json(HOST_HELLO)
         assert _receive_until(host, "ready")["room"]["peers"] == 0
         _say(host, utterance_id="h_0006bbbbbb")
         tr = _receive_until(host, "transcription")
-        # Room mode tags the speaker; the SOLO audio fallback stays untagged
-        # (local playback — the exact Phase 1–4 shape for the audio pair).
+        # BUG-604: transcription and audio of one utterance are tagged alike
         assert tr["speaker"] == "host"
         _receive_until(host, "translation")
         audio = _receive_until(host, "audio")
-        assert "speaker" not in audio
+        assert audio["speaker"] == tr["speaker"] == "host"
         assert len(host.receive_bytes()) == audio["bytes"]
 
 
