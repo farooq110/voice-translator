@@ -6,7 +6,7 @@ Language — the other person installs and configures nothing. The system
 detects what language each side speaks, translates only the configured pair in
 the required direction, and passes every other language through untouched.
 
-> **Status — Phase 6 complete (of 10): mobile/browser compatibility.** Working today:
+> **Status — Phase 7 complete (of 10): Zoom integration.** Working today:
 > responsive browser UI (mobile-first), microphone capture, real-time
 > streaming to the backend, **local CPU speech recognition (Whisper, no
 > GPU)** with automatic language detection (detect-first, then a pinned
@@ -21,15 +21,16 @@ the required direction, and passes every other language through untouched.
 > a sequential playback queue that can never overlap, **two-person
 > sessions** (share an invite link; transcripts with speaker labels;
 > translated voices reach only the listener; a playback guard prevents
-> feedback loops — ADR-0014) and — new in Phase 6 — **mobile-ready
-> behavior**: backgrounding the tab or an incoming call stops the capture
-> honestly instead of streaming silence (ADR-0016), a screen wake lock
-> keeps hands-free sessions alive, the app installs to a phone home
-> screen (PWA manifest + icons), and the server sees which device
-> families connect (`/health`). Verified under full device emulation in
-> headless Chromium; the human real-device matrix lives in
-> [docs/testing.md §13](docs/testing.md#13-phase-6--mobilebrowser-compatibility--actual-results-2026-11-06-adr-0016).
-> Meeting integrations arrive in the next phases — see the [roadmap](#roadmap).
+> feedback loops — ADR-0014), **mobile-ready behavior** (backgrounding
+> the tab or an incoming call stops the capture honestly — ADR-0016; QA
+> hardened through v0.6.3) and — new in Phase 7 — the **Zoom bridge**
+> (ADR-0019): a meeting's RTMS audio stream flows through the same
+> pipeline into a normal two-person room, so the translator user hears
+> the meeting translated live on their own device. Verified against a
+> signature-verifying fake of Zoom's edge (no Zoom account in the
+> sandbox — KI-029; the real-app checklist lives in
+> [docs/deployment.md §6](docs/deployment.md)).
+> Meeting integrations continue in the next phases — see the [roadmap](#roadmap).
 
 ![desktop](docs/screenshots/phase2/desktop.png)
 
@@ -111,12 +112,15 @@ audio never persisted).
 ## Project layout
 
 ```
-prompt.md            Phase 5 scope & delivery record (two-participant browser MVP)
+prompt.md            Phase 7 scope & delivery record (Zoom integration via the RTMS bridge)
 PHASE-3.md           phase-3 branch only — Phase 3 deep dive
 PHASE-4.md           phase-4 branch only — Phase 4 deep dive
 PHASE-5.md           phase-5 branch only — Phase 5 deep dive
+PHASE-6.md           phase-6 branch only — Phase 6 deep dive
+PHASE-7.md           phase-7 branch only — Phase 7 deep dive
 AGENT.md             permanent instructions for AI coding agents
 backend/             FastAPI + faster-whisper (uv-managed; tests in backend/tests)
+                     app/zoom/ — the Phase 7 Zoom RTMS bridge (ADR-0019)
 frontend/            React + Vite + TS strict (tests co-located in src)
 docs/                architecture, protocol spec, testing results, deployment, ADRs
 project-state/       CURRENT_STATE · TASKS · DECISIONS · KNOWN_ISSUES · CHANGELOG
@@ -136,6 +140,8 @@ cd backend && uv run python scripts/e2e_synthetic_check.py --url ws://localhost:
 cd backend && uv run python scripts/e2e_translation_check.py             # Rules 1–3 with real MT
 cd backend && uv run python scripts/e2e_tts_check.py                     # Rules 1–3 + real spoken output
 cd backend && uv run python scripts/e2e_phase5_check.py                  # TWO participants: routing + relay, real models
+cd backend && ZOOM_CLIENT_ID=… ZOOM_CLIENT_SECRET=… ZOOM_SECRET_TOKEN=… \
+             uv run python scripts/e2e_zoom_check.py                     # Zoom bridge E2E (fake RTMS, real pipeline)
 cd backend && uv run python scripts/silence_guard_check.py --url ws://localhost:3000/ws/audio
 node frontend/scripts/smoke_phase2.mjs      # headless browser smoke — solo flow (fake mic)
 node frontend/scripts/smoke_phase5.mjs      # headless browser smoke — host + guest via invite link
@@ -186,7 +192,14 @@ list (what is *not* tested yet): [docs/testing.md](docs/testing.md).
   via the provider abstraction ([ADR-0013](docs/decisions/0013-tts-offline-piper.md)).
 - The first synthesis into a language pays ~1.5 s of lazy voice load
   (measured, documented); later sentences synthesize at RTF ≈ 0.06–0.08.
-- Meeting integrations (Zoom first) arrive in **Phase 7**.
+- The Zoom bridge (Phase 7, ADR-0019) is verified against a fake of
+  Zoom's RTMS edge built from Zoom's published protocol reference — no
+  Zoom account exists in the sandbox, so the real handshake details
+  (media-URL key, frame encoding) are defensive and unconfirmed until a
+  real Marketplace app runs the checklist in
+  [docs/deployment.md §6](docs/deployment.md) (KI-029). The bridge
+  delivers translations to the translator user's own device only —
+  nothing is injected into the meeting in v1 (KI-031).
 
 ## Roadmap (master prompt §17)
 
@@ -198,7 +211,7 @@ list (what is *not* tested yet): [docs/testing.md](docs/testing.md).
 | 4 | TTS + browser playback | **complete** |
 | 5 | Complete browser MVP (two participants) | **complete** |
 | 6 | Mobile/browser compatibility on real devices | **complete** (device emulation verified + human matrix ready; QA-hardened v0.6.3 — reconnect deadlock, mic-loss, solo speaking-chip & touch-target fixed, ADR-0017/0018) |
-| 7 | Zoom integration (first meeting app) | not started |
+| 7 | Zoom integration (first meeting app) | **complete** (RTMS bridge into the existing pipeline — ADR-0019; verified live against a fake Zoom edge, real-Zoom checklist in deployment.md §6 / KI-029) |
 | 8 | Chrome extension / advanced audio | not started |
 | 9 | More meeting apps (one at a time) | not started |
 | 10 | Production readiness & release | not started |

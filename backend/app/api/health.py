@@ -65,4 +65,9 @@ async def health(request: Request) -> dict[str, object]:
     stt_queue = getattr(state, "stt_queue", None)
     if stt_queue is not None:
         payload["stt_queue"] = stt_queue.stats()
+    zoom_bridge = getattr(state, "zoom_bridge", None)
+    if zoom_bridge is not None:
+        payload["zoom"] = zoom_bridge.describe()
+    else:
+        payload["zoom"] = {"enabled": False}
     return payload

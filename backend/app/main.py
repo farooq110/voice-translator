@@ -31,8 +31,10 @@ from .tts import TTSService, build_tts_service
 from .ws.audio_ws import router as audio_router
 from .ws.backpressure import SttQueue
 from .ws.rooms import RoomManager
+from .zoom.bridge import ZoomBridge
+from .zoom.router import router as zoom_router
 
-APP_VERSION = "0.6.3"
+APP_VERSION = "0.7.0"
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -64,6 +66,16 @@ def create_app(
     translation = translator if translator is not None else build_translation_service(settings)
     tts_service = tts if tts is not None else build_tts_service(settings)
 
+    # Phase 7 (ADR-0019): the Zoom bridge is mounted ONLY when enabled AND
+    # credentialed — a disabled integration 404s on /zoom/* instead of
+    # silently accepting events, and /health reports zoom.enabled=false.
+    zoom_bridge: ZoomBridge | None = None
+    if settings.zoom_enabled and settings.zoom_client_id and settings.zoom_client_secret:
+        zoom_bridge = ZoomBridge(settings)
+        app_includes_zoom = True
+    else:
+        app_includes_zoom = False
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         executor = ThreadPoolExecutor(
@@ -83,6 +95,7 @@ def create_app(
         app.state.settings = settings
         app.state.started_at = time.time()
         app.state.version = APP_VERSION
+        app.state.zoom_bridge = zoom_bridge
         # Warm the models in the background so /health answers immediately;
         # inference itself is always dispatched to the bounded executor.
         warmup = asyncio.create_task(asyncio.to_thread(provider.ensure_loaded))
@@ -122,13 +135,15 @@ def create_app(
             tts_warmup.cancel()
             translation.aclose()
             tts_service.aclose()
+            if zoom_bridge is not None:
+                await zoom_bridge.aclose()
             executor.shutdown(wait=False, cancel_futures=True)
             logger.info("app stopped")
 
     app = FastAPI(
         title="AI Voice Translator",
         version=APP_VERSION,
-        summary="Real-time voice translation — Phase 5: complete browser MVP (two participants)",
+        summary="Real-time voice translation — Phase 7: Zoom integration via the RTMS bridge",
         lifespan=lifespan,
     )
 
@@ -144,6 +159,8 @@ def create_app(
 
     app.include_router(health_router)
     app.include_router(audio_router)
+    if app_includes_zoom:
+        app.include_router(zoom_router)
 
     dist_dir = _PROJECT_ROOT / "frontend" / "dist"
     if dist_dir.is_dir():

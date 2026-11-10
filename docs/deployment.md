@@ -152,6 +152,12 @@ All in `backend/.env.example`; highlights:
 | `TTS_WORKER_THREADS` | `1` | synthesis executor size |
 | `HF_HOME` | *(set by start.sh)* | keeps model cache inside the project |
 | `HF_ENDPOINT` | *(unset)* | mirror for filtered networks |
+| `ZOOM_ENABLED` | `false` | **Phase 7 (ADR-0019)** master switch for the Zoom RTMS bridge |
+| `ZOOM_CLIENT_ID` / `ZOOM_CLIENT_SECRET` | *(empty)* | Zoom General App OAuth credentials — sign the RTMS handshake; bridge stays OFF without them |
+| `ZOOM_SECRET_TOKEN` | *(empty)* | webhook validation token — answers `endpoint.url_validation` and verifies `x-zm-signature`; empty = verification skipped (dev only) |
+| `ZOOM_NATIVE_LANGUAGE` / `ZOOM_PREFERRED_LANGUAGE` | `ur` / `en` | the meeting rooms' language pair (the bridge is the room's host) |
+| `ZOOM_WS_URL` | `ws://127.0.0.1:3000/ws/audio` | where the bridge's internal protocol-v1 client connects (override in dev mode :8000) |
+| `ZOOM_PAUSE_MS` / `ZOOM_SOFT_CAP_S` / `ZOOM_RMS_THRESHOLD` | `600` / `6.0` / `300` | meeting-audio endpointing (KI-030) |
 
 Frontend build-time flag: `VITE_FEATURE_HANDS_FREE` (default `true`) — set
 `false` to remove the hands-free toggle from the built SPA (ADR-0009).
@@ -191,3 +197,38 @@ internet.**
 | Port 3000 busy | `start.sh` auto-kills its previous PID (`.zscripts/dev.pid`); check for foreign processes |
 | Browser can't connect WS | must be same-origin or proxied (`/ws`); check `CORS_ORIGINS` if cross-origin |
 | Urdu shows as "hi" in transcript | known Whisper ur/hi confusion — see KI-002 and docs/testing.md §4 |
+
+## 6a. Zoom integration (Phase 7, ADR-0019) — real-app runbook
+
+The bridge ships verified against a fake of Zoom's edge (KI-029). Turning
+it on against REAL Zoom is a human checklist — every step needs a Zoom
+account, which the sandbox does not have:
+
+1. **Create the app** — marketplace.zoom.us → Develop → Build App →
+   **General App**, user-managed. Copy the Client ID and Client Secret.
+2. **Enable RTMS** — request RTMS access for the app if your account
+   requires it (Zoom gates RTMS behind a request).
+3. **Event subscription** — add a webhook endpoint
+   `https://<your-deployment>/zoom/webhook` and subscribe to
+   `meeting.rtms_started` and `meeting.rtms_stopped`. Copy the **Secret
+   Token**.
+4. **Scopes** — add `meeting:read:meeting_audio` (+ transcript scope if
+   you later enable Zoom's own transcript stream).
+5. **Configure the backend** — set `ZOOM_ENABLED=true`,
+   `ZOOM_CLIENT_ID`, `ZOOM_CLIENT_SECRET`, `ZOOM_SECRET_TOKEN`; verify
+   `/health` shows `"zoom": {"enabled": true, ...}`.
+6. **Zoom validates the webhook** — the app answers the
+   `endpoint.url_validation` challenge automatically. If a proxy rewrites
+   the public URL, set `ZOOM_WEBHOOK_URL_OVERRIDE` so the v0 signature
+   still matches.
+7. **First live meeting** — start a meeting as the app-installing host,
+   start the RTMS stream from the Zoom client, then:
+   `curl -s https://<deployment>/zoom/meetings` → open the invite link
+   (`…/?room=CODE`) on your device. Speech should appear in the room's
+   transcript within a few seconds (segmenter soft cap 6 s).
+8. **Record the results here** — handshake field names observed
+   (`content.media_url` vs alternatives), audio frame encoding
+   (base64-in-JSON vs binary), keep-alive cadence — and flip KI-029 to
+   RESOLVED. Stop the stream and confirm
+   `curl -s https://<deployment>/health | jq .zoom.active_meetings`
+   returns to 0.

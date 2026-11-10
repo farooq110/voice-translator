@@ -1,9 +1,10 @@
 # Architecture
 
-Phase 4 scope: the Phase 2 STT pipeline + Phase 3 translation decision
-engine + **offline TTS and browser playback** (ADR-0013). Meeting
-integrations (Phase 7+) attach at the marked extension points without
-re-architecting.
+Phase 7 scope: the complete browser pipeline (STT + decision engine +
+translation + TTS, phases 1–4), the two-participant rooms (ADR-0014),
+the mobile-honest capture (ADR-0016) and the **Zoom RTMS bridge**
+(ADR-0019) — the first meeting integration, attached at the extension
+points the earlier phases reserved without re-architecting anything.
 
 ## 1. Component overview
 
@@ -55,9 +56,38 @@ re-architecting.
 │  stt/faster_whisper_stt.py  CTranslate2 CPU int8, lazy load, pinned language,          │
 │                      beam search + decode-time VAD (ADR-0006/0007)                     │
 │  api/health.py       /health (status, engines, session stats, rooms, vad, stt_queue,   │
-│                      translation.pairs, tts.languages)                                 │
+│                      translation.pairs, tts.languages, zoom bridge state)               │
 │  main.py             app factory (DI: settings/stt/vad/translator/tts), serves dist    │
 └────────────────────────────────────────────────────────────────────────────────────────┘
+
+Phase 7 — the Zoom bridge (app/zoom/, ADR-0019; mounted only when enabled
+AND credentialed):
+
+```
+Zoom cloud                                    Backend
+──────────                                    ──────────────────────────────────────────
+webhook  meeting.rtms_started ──────────────▶ POST /zoom/webhook (router.py)
+  {meeting_uuid, rtms_stream_id,                ├─ x-zm-signature v0 check (signing.py)
+   server_urls}                                 ├─ endpoint.url_validation challenge
+                                                └─ ZoomBridge (bridge.py): ONE worker / meeting
+  signaling WS ◀────────────────────────────── RtmsClient (rtms.py): handshake msg_type 1
+  media WS    ◀──────────────────────────────    → media handshake (L16 · 16 kHz · mono · 20 ms)
+    {msg_type:14 audio frames}                   → CLIENT_READY_ACK 7 · keep-alive 12→13
+                                                   → UtteranceSegmenter (RMS pause + soft cap;
+                                                     bounded drop-on-full queue)
+                                                  PipelineClient (pipeline_client.py):
+                                                   protocol-v1 client of OUR /ws/audio —
+                                                   hello role=host (zoom pair, platform
+                                                   "zoom-bridge") → binary PCM + flush
+                                                        │
+                                                        ▼
+                                             the EXISTING pipeline (VAD → Whisper →
+                                             decision → OPUS-MT → Piper) in a normal
+                                             two-participant room
+  GET /zoom/meetings ────────────────────────▶ invite code + live stats per meeting
+(the translator user opens …/?room=CODE and is the room's guest — the
+ meeting's translations and spoken voice arrive on THEIR device; nothing
+ is injected back into the meeting in v1, KI-031)
 ```
 
 ## 2. Threading & latency model

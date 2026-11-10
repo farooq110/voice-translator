@@ -1,10 +1,11 @@
 # User Manual — AI Voice Translator
 
-*This manual belongs to the `phase-6` branch and matches exactly what this
-branch's code does (v0.6.0): live speech-to-text, the translation decision
-engine, spoken translations, two-person rooms, and the mobile behaviors
-added in Phase 6. One page, two views: the **host view** (the translator
-user) and the **guest view** (the invited second person).*
+*This manual belongs to the `phase-7` branch and matches exactly what this
+branch's code does (v0.7.0): live speech-to-text, the translation decision
+engine, spoken translations, two-person rooms, the mobile behaviors added
+in Phase 6, and the Zoom meeting bridge added in Phase 7. One page, two
+views: the **host view** (the translator user) and the **guest view** (the
+invited second person) — plus the Zoom listener below.*
 
 ---
 
@@ -130,6 +131,42 @@ goes to the cloud.
 | Guest lost the room after a long offline gap | Room expired (~2 min linger) → host sends a fresh link. |
 | *server_busy* notice | That segment was dropped by design under heavy load → keep talking; the next segment is processed normally. |
 
+## 6. Zoom meetings (the bridge)
+
+The app can listen to a Zoom meeting and translate it for you on YOUR
+device — no bot joins the meeting, and nobody in the meeting needs to
+install anything. Your device shows the live speaker-tagged transcript
+and speaks the translations.
+
+One-time setup (the person running the server):
+1. A Zoom **General App** is created at marketplace.zoom.us with RTMS
+   access and the two webhook events (`meeting.rtms_started` /
+   `meeting.rtms_stopped`) pointed at the server — the walk-through is
+   `docs/deployment.md §6a`.
+2. The server is started with `ZOOM_ENABLED=true` and the app's three
+   credentials. `/health` then shows `"zoom": {"enabled": true, ...}`.
+
+Using it in a meeting:
+1. The meeting host starts the RTMS stream from Zoom (the app appears in
+   the meeting's Apps once configured).
+2. Within seconds the meeting appears at `https://<server>/zoom/meetings`
+   with an invite link (`…/?room=CODE`).
+3. Open that link on your phone or desktop — you join the meeting's
+   translation room as the listener. From here everything works like a
+   normal session: transcript lines with speaker labels, translations,
+   spoken output (toggle **Spoken translations** to mute), and the
+   honest-stop banners if your device interrupts you.
+4. When the meeting ends (or the host stops the stream), the room closes
+   and the invite stops working — ask for the new link if the stream is
+   restarted.
+
+Two things worth knowing: the meeting's language pair is configured on
+the SERVER (not in your browser — the room's host is the bridge), and
+nothing you hear through the bridge is played back into Zoom — other
+participants never hear the translation unless they open the invite on
+their own device. A room holds exactly two participants, so one invite
+serves ONE listener; a second listener gets `room_full`.
+
 ## Notes
 
 - Everything — recognition, translation, voices — runs on this server;
@@ -137,6 +174,14 @@ goes to the cloud.
 - Transcripts live only in the page; a reload clears them.
 - Deleting a line is local to your device; the other participant keeps
   their copy.
+
+## Changelog of this manual (v0.7.0)
+
+- New **§6 Zoom meetings**: the meeting bridge (ADR-0019) — a Zoom
+  meeting's RTMS audio now feeds the same pipeline; the translator user
+  opens the invite from `/zoom/meetings` and listens on their own device.
+- No browser-facing behavior changed in this release; everything from
+  the v0.6.3 notes still applies.
 
 ## Changelog of this manual (v0.6.3)
 
