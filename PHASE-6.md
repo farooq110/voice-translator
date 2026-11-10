@@ -258,3 +258,17 @@ the transcription's `host`), smokes 9/9 / 10/10 / 12/12, `/health`
 reports 0.6.3. The honest-boundary line did not move: emulation is
 still emulation, and the human device matrix remains the only gate to
 hardware claims (KI-004/015/018).
+
+## Phase 6 closed (2026-11-10)
+
+Approval: user message "start phase 7 and complete it" (2026-11-10) — per
+the master prompt §23 workflow this closes the Phase 6 approval record.
+The phase ships as **v0.6.3**: the mobile compatibility work (ADR-0016)
+plus three QA-hardening rounds (ADR-0017 reconnect deadlock, ADR-0018
+device-loss honest stop, and the v0.6.3 solo speaking-chip + touch-target
+fixes) — backend 190 passed + 1 xfailed, frontend 139/139, smokes 9/9 /
+10/10 / 12/12, live E2E translation 3/3. The human real-device matrix
+(testing.md §13b) remains the only open gate, and it stays open until a
+human runs it — no hardware claim was ever made from the sandbox.
+Phase 7 (Zoom, the first meeting integration) starts from here; its story
+lives in `PHASE-7.md` on the `phase-7` branch.
