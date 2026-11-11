@@ -595,3 +595,36 @@ Run `curl -s https://<deployment>/health | jq .sessions.by_platform` after
 the matrix: the tags observed there (e.g. `android-chrome`, `ios-safari`)
 are the ground truth that real devices connected (ADR-0016 §3). Results of
 this matrix are to be recorded here when run.
+
+## 14. Phase 7 — Zoom bridge (RTMS) — actual results (2026-11-10, ADR-0019)
+
+**What is real:** the live FastAPI app, its webhook receiver (v0 signature
+enforcement + `endpoint.url_validation` challenge), the Zoom bridge worker,
+the protocol-v1 pipeline client, the app's own Silero-VAD → Whisper →
+decision-engine → OPUS-MT → Piper path, and the two-participant room
+routing to a second (guest) WebSocket client.
+
+**What is faked:** ZOOM'S RTMS EDGE ONLY (`app/zoom/fake_rtms.py` — a
+signature-verifying double of the signaling + media sockets built from
+Zoom's published protocol reference). No Zoom account exists in the
+sandbox (KI-029); mocked tests are never used to claim real pipeline
+behavior (AGENT.md §6) — every pipeline claim below ran REAL models.
+
+| Check | Result |
+| --- | --- |
+| Backend suite (+30 zoom tests: signing, segmenter, rtms, bridge, webhook API) | **220 passed + 1 xfailed** |
+| `scripts/e2e_zoom_check.py` (live :3000) | **5/5 PASS — 17.9 s total** |
+| — 1. url_validation challenge | answered with the correct HMAC-SHA256 `encryptedToken` |
+| — 2. `meeting.rtms_started` (signed) | acked `{"ok":true}` immediately; worker reached `live`; invite `92Q55A` published on `/zoom/meetings` |
+| — 3. RTMS handshake | signature verified by the fake; media params negotiated L16 / 16 kHz / mono (codec=1, sample_rate=1, channel=1) |
+| — 4. meeting audio → guest | 6.6 s ur fixture (edge-tts) streamed at 2× → 3 utterances (Silero split); guest received `transcription` events with `speaker:"host"`, a REAL ur→en translation (local OPUS-MT, `"How's now?"`), and 111,618 B of routed PCM — the Arabic-detected greeting RELAYED as original audio (decision Rule 3, honestly passed through), the Urdu sentences TTS'd to the listener |
+| — 5. `meeting.rtms_stopped` | acked; graceful `STREAM_CLOSE_REQ` observed on the fake signaling socket; `/health zoom.active_meetings` returned to 0 |
+| Regression: e2e translation / two-participant / TTS | **3/3 / 4/4 / 3/3** |
+| Regression: smokes phase2 / phase5 / phase6 | **10/10 / 12/12 / 9/9** |
+| Silence guard | **PASS** |
+| Frontend (untouched) | 139/139, tsc/ESLint clean, build 264.01 kB |
+| `/health.version` | **0.7.0** |
+
+**Not measured (honesty list):** Zoom's production RTMS edge — the
+real-app runbook is `docs/deployment.md §6`; meeting-audio endpointing on
+real meeting acoustics (KI-030); any meeting-facing output (KI-031).

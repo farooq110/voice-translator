@@ -133,6 +133,46 @@ class Settings(BaseSettings):
     # never evicted.
     room_stale_seat_seconds: float = 12.0
 
+    # --- Zoom bridge (Phase 7, ADR-0019) ---
+    # The bridge joins a Zoom meeting's Real-Time Media Stream (RTMS) when a
+    # `meeting.rtms_started` webhook arrives, feeds the meeting's mixed audio
+    # through the SAME pipeline a browser uses (via a protocol-v1 client of
+    # our own /ws/audio), and exposes the room invite at /zoom/meetings.
+    # Disabled unless `zoom_enabled` AND credentials are present; secrets
+    # never leave backend env vars. The RTMS pieces require a Zoom General
+    # App (marketplace.zoom.us) with RTMS access + the webhook secret token.
+    zoom_enabled: bool = False
+    # OAuth client id/secret of the General App (signs the RTMS handshake).
+    zoom_client_id: str = ""
+    zoom_client_secret: str = ""
+    # Webhook secret token — answers endpoint.url_validation and verifies
+    # x-zm-signature on every delivery. Empty = verification skipped (dev).
+    zoom_secret_token: str = ""
+    # Public webhook URL Zoom calls, when a reverse proxy rewrites the
+    # request URL (the v0 signature covers the full URL string).
+    zoom_webhook_url_override: str = ""
+    # The language pair the bridge configures for meeting rooms (the host's
+    # pair, Phase 5 room model). Both ISO-639-1 tags.
+    zoom_native_language: str = "ur"
+    zoom_preferred_language: str = "en"
+    # Where the bridge's internal protocol-v1 client connects. Default fits
+    # the single-port deployment (start.sh, :3000); dev mode (uvicorn :8000)
+    # must override it.
+    zoom_ws_url: str = "ws://127.0.0.1:3000/ws/audio"
+    # RTMS connection handshake timeout / pipeline reconnect backoff cap.
+    zoom_connect_timeout_s: float = 15.0
+    zoom_reconnect_max_s: float = 30.0
+    # How long a worker waits for the internal pipeline connection before it
+    # declares the meeting failed (tests shrink this).
+    zoom_worker_start_timeout_s: float = 25.0
+    # Meeting-audio endpointing (calmer than the browser's): flush after
+    # this much quiet following speech, hard-flush at the soft cap, and the
+    # RMS level (0..32767) that counts as speech. The server-side Silero VAD
+    # still gates/trim/splits every flushed buffer (ADR-0009).
+    zoom_pause_ms: int = 600
+    zoom_soft_cap_s: float = 6.0
+    zoom_rms_threshold: int = 300
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -618,3 +618,56 @@ Format: description / reproduction / root cause / fix / verification / status.
 - **Resolution:** M5 now asserts `>= 1` for the specific tag (the
   mechanism check it always meant to be); the failure class cannot recur.
 - **Status:** CLOSED (2026-11-08, v0.6.3).
+
+## KI-029 — OPEN: Zoom RTMS is verified against a FAKE of Zoom's side only — real-Zoom handshake details unconfirmed
+
+- **Description (Phase 7, ADR-0019):** the sandbox has no Zoom account,
+  Marketplace app, or RTMS-enabled meeting, so the bridge's RTMS pieces
+  (signaling/media handshake, audio frame encoding, the media-URL key in
+  the signaling response, keep-alive pacing on Zoom's production edge)
+  are verified ONLY against the in-repo double (`app/zoom/fake_rtms.py`)
+  which implements the documented protocol from Zoom's public reference
+  (developers.zoom.us/docs/rtms, retrieved 2026-11-10). The client is
+  defensive on purpose: it probes several documented-plausible media-URL
+  keys in the signaling response, accepts audio as base64-in-JSON,
+  `{"data": …}` wrappers, or raw binary frames, and drops odd-length or
+  undecodable frames with a log line instead of dying.
+- **What IS real regardless:** the webhook receiver (v0 signature
+  validation, url_validation challenge), the bridge worker lifecycle,
+  the protocol-v1 pipeline client, and the entire translation pipeline —
+  all verified live (`scripts/e2e_zoom_check.py`, 5/5).
+- **Verification needed with a real Zoom General App (RTMS access):**
+  first live `meeting.rtms_started` round-trip; whether the fake's
+  `content.media_url` response shape matches; whether 20 ms frames
+  arrive base64-in-JSON or binary; DATA_ACK expectations (none are
+  implemented — none documented in the retrieved reference).
+- **Status:** OPEN (awaiting a real Zoom app — human step,
+  docs/deployment.md §6 checklist).
+
+## KI-030 — OPEN (by design): meeting-audio endpointing is coarser than the browser's
+
+- **Description (Phase 7):** the browser endpoints speech per microphone
+  with a 300 ms micro-pause rule (ADR-0010); the bridge endpoints the
+  meeting MIX (far-end loudspeakers, crosstalk, possible continuous
+  speech) with an RMS pause detector (`zoom_pause_ms`, default 600 ms) +
+  a hard soft cap (`zoom_soft_cap_s`, default 6 s) and relies on the
+  server-side Silero planner (ADR-0009) to trim/split every flushed
+  buffer. A sentence spanning a flush boundary may surface as two
+  utterances.
+- **Mitigation:** the server VAD still gates silence/noise and splits at
+  natural pauses; the decision engine is per-utterance, so short
+  segments cost nothing but latency.
+- **Status:** OPEN (tuning knob; re-measure on real meeting audio).
+
+## KI-031 — OPEN: no translation is delivered back INTO the meeting (captions/audio out) in v1
+
+- **Description (Phase 7, ADR-0019):** RTMS v1 delivers translations to
+  the translator user's own device (the room's guest seat). Sending
+  captions or synthesized voice INTO the meeting would reach every
+  participant — RTMS has no per-listener addressing — which breaks the
+  product rule "translated audio reaches only the listener" for N > 2
+  meetings, and the retrieved reference does not pin a caption-send
+  message. Deferred until a real Zoom app exists to design against
+  (Zoom's interpretation/caption APIs may be the better vehicle anyway).
+- **Status:** OPEN (Phase 9 candidate — "more meeting apps / deeper
+  integration").

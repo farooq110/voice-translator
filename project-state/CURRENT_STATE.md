@@ -1,6 +1,42 @@
 # CURRENT_STATE
 
-_Last updated: 2026-11-08 — QA round v0.6.3 (BUG-604 solo speaking chip, BUG-605 touch target, M5 hardening) fixed and re-verified live; re-test Journal verdict PASS WITH FINDINGS fully cleared_
+_Last updated: 2026-11-10 — Phase 7 (Zoom integration via the RTMS bridge, ADR-0019) implemented, verified live (e2e_zoom_check 5/5 + full regression battery green), pending user approval_
+
+## Phase
+
+**Phase 7 — Zoom integration (first meeting app)** — implemented and
+verified (2026-11-10, ADR-0019). **Phases 1–6 are complete and closed**
+(the Phase 6 approval record is closed by the user's "start phase 7"
+instruction, per master prompt §23). Work sits on the `phase-7` branch
+(created from the phase-6 tip, which carries the closed v0.6.3 QA state);
+`prompt.md` now documents Phase 7 and clears the previous phase's record;
+`PHASE-7.md` lives only on the phase-7 branch.
+
+**What the bridge is:** when a Zoom meeting's RTMS stream starts
+(webhook `meeting.rtms_started`, v0-signature-verified), one worker
+connects to Zoom's documented two-phase WebSocket, negotiates raw
+L16/16 kHz/mono audio, and feeds it into the app's OWN `/ws/audio` as an
+ordinary protocol-v1 host of a two-participant room — the human joins
+via the invite published at `GET /zoom/meetings` and hears the meeting
+translated live on their own device. The engine is untouched; the
+frontend is untouched; the integration is OFF unless enabled +
+credentialed.
+
+**Verification (2026-11-10):** backend **220 passed + 1 xfailed** (+30
+Zoom tests); frontend untouched **139/139** + tsc/ESLint/build clean;
+live `scripts/e2e_zoom_check.py` **5/5 in 17.9 s** against the
+signature-verifying fake of Zoom's edge (url_validation; worker live +
+invite published; handshake signature verified + L16/16 kHz/mono; 6.6 s
+ur fixture → 3 utterances → guest transcription(speaker=host) + real
+ur→en OPUS-MT + 111,618 B routed PCM; graceful stop with
+STREAM_CLOSE_REQ); regression battery: e2e translation **3/3**,
+two-participant **4/4**, TTS **3/3**, silence guard **PASS**, smokes
+**10/10 / 12/12 / 9/9**; `/health.version` **0.7.0**.
+
+**Honest boundary:** Zoom's production edge is NOT verified (no Zoom
+account in the sandbox) — KI-029 with the human runbook in
+`docs/deployment.md §6a`; meeting-audio endpointing is a measured knob
+(KI-030); nothing is injected INTO the meeting in v1 (KI-031).
 
 ## Phase
 

@@ -218,7 +218,28 @@ After that push updated code in main and phase-6." Fixes per ADR-0018.
 | QA63-05 | Live re-verification on the redeployed v0.6.3 build: solo TTS speaking chip renders; copy-button height ≥ 44 px at 390 px; `smoke_phase6` **9/9** (M5 robust); `/health.version` **0.6.3** | DONE |
 | QA63-06 | Docs: audio-protocol §3a/§3b speaker rule; testing.md §13a-qa4; KNOWN_ISSUES KI-026/027/028; DECISIONS D-021; CHANGELOG 0.6.3; CURRENT_STATE; TASKS; README roadmap; APP_VERSION 0.6.3 (+ frontend package/lockfile) | DONE |
 
-## Phase 7+ — see `prompt.md` section 17
+## Phase 7 — Zoom integration (first meeting app) — COMPLETE (pending approval)
 
-Zoom (P7), extension (P8), more apps (P9), production (P10). All `TODO`
-and **blocked until the respective phase is approved**.
+Approval: user message "start phase 7 and complete it" (2026-11-10) —
+explicit approval per master prompt §23 (it also closes the Phase 6
+approval record).
+
+| ID | Task | Status |
+| --- | --- | --- |
+| P7-01 | Protocol research: Zoom RTMS reference (developers.zoom.us data types + meetings quickstart + zoom-plugin-codex guide, retrieved 2026-11-10) — two-phase WebSocket, integer enums, L16/16 kHz/mono negotiation, keep-alive, STREAM_CLOSE | DONE |
+| P7-02 | ADR-0019: bridge architecture decision — RTMS ingest → protocol-v1 client of our own /ws/audio (pipeline stays the product; bot/virtual-audio/caption-REST rejected); no meeting-facing output in v1 (no per-listener addressing) | DONE |
+| P7-03 | `app/zoom/signing.py`: RTMS join signature (HMAC-SHA256 client_secret over "id,uuid,stream"), url_validation answer, x-zm-signature v0 verification (constant-time) | DONE |
+| P7-04 | `app/zoom/rtms.py`: RtmsClient — signaling handshake (media_type=1), media handshake (content_type RAW_AUDIO, SR_16K, MONO, codec L16, mixed stream, 20 ms), CLIENT_READY_ACK, keep-alive 12→13 both sockets, stream/session state handling, graceful STREAM_CLOSE_REQ, defensive audio decode (base64 / {"data":…} / binary; odd frames dropped) | DONE |
+| P7-05 | `app/zoom/pipeline_client.py`: reconnecting protocol-v1 client (hello role=host + zoom pair + platform "zoom-bridge", re-hello with room code, binary + flush queue entries, 10 s heartbeat, drop-on-full bounded queue, stop-aware backoff) | DONE |
+| P7-06 | `app/zoom/bridge.py`: ZoomBridge webhook routing (duplicate-start dedupe per Zoom's single-connection rule; stop matching on uuid-only payloads), UtteranceSegmenter (RMS pause + soft cap endpointing), ZoomMeetingWorker lifecycle (pipeline-first, RTMS second, ordered shutdown: tail flush → drain → close) | DONE |
+| P7-07 | `app/zoom/router.py`: POST /zoom/webhook (url_validation challenge, v0 enforcement, immediate ack — handle_event spawns only), GET /zoom/meetings (invites + stats); router mounted only when enabled + credentialed; `/health` zoom section | DONE |
+| P7-08 | Config: zoom_* settings block + .env.example; APP_VERSION 0.7.0 (+ frontend package version) | DONE |
+| P7-09 | Tests: 30 new — signing vectors, webhook enforcement, segmenter behavior, RTMS protocol edges (rejection, session-stopped, decode variants, keep-alives), bridge integration (worker + fake pipeline server + fake RTMS in one process), webhook HTTP surface (disabled, validation, 401, ack, listing, health) → backend **220 passed + 1 xfailed** | DONE |
+| P7-10 | Tooling: `app/zoom/fake_rtms.py` (signature-verifying fake of Zoom's edge — TEST DOUBLE, clearly labeled) + `scripts/e2e_zoom_check.py` (signed webhooks → fake RTMS → real pipeline → guest client) | DONE |
+| P7-11 | Live verification: e2e_zoom_check **5/5 in 17.9 s** (url_validation; worker live + invite 92Q55A published; handshake signature verified + L16/16k/mono; 6.6 s ur fixture → 3 utterances → guest transcription(speaker=host) + real ur→en OPUS-MT + 111,618 B routed PCM incl. Arabic-greeting relay; graceful stop + STREAM_CLOSE_REQ + health zero); regression battery: e2e translation 3/3, phase5 4/4, TTS 3/3, silence guard PASS, smokes 10/10 / 12/12 / 9/9; frontend 139/139 + tsc/build clean; /health.version 0.7.0 | DONE |
+| P7-12 | Docs: ADR-0019; prompt.md → Phase 7 record; PHASE-7.md (branch story); README (status/layout/testing/limitations/roadmap); testing.md §14; deployment.md (env table + §6a real-app runbook); architecture.md (bridge block); KNOWN_ISSUES KI-029/030/031; DECISIONS D-022; CHANGELOG 0.7.0; CURRENT_STATE; USER_MANUAL Zoom section; AGENT.md header hygiene | DONE |
+
+## Phase 8+ — see `prompt.md` section 17
+
+Extension (P8), more apps (P9), production (P10). All `TODO` and
+**blocked until the respective phase is approved**.

@@ -1,9 +1,9 @@
-# prompt.md — Phase 6 Scope & Delivery Record
+# prompt.md — Phase 7 Scope & Delivery Record
 
-**Phase:** 6 of 10 — Mobile/browser compatibility on real devices
+**Phase:** 7 of 10 — Zoom integration (first meeting app)
 **Status:** implemented — full verification round complete — **pending user approval** (§23 workflow)
-**Version:** v0.6.0
-**ADR:** [docs/decisions/0016-mobile-browser-compatibility.md](docs/decisions/0016-mobile-browser-compatibility.md)
+**Version:** v0.7.0
+**ADR:** [docs/decisions/0019-zoom-rtms-bridge.md](docs/decisions/0019-zoom-rtms-bridge.md)
 
 > This repository documents the **current phase only** in this file. The
 > complete master prompt (25 sections, 10-phase roadmap, approval workflow)
@@ -12,192 +12,91 @@
 > [README.md § Roadmap](README.md#roadmap-master-prompt-17); durable agent
 > rules live in [AGENT.md](AGENT.md). Branch-local deep dives: `PHASE-3.md`
 > (phase-3 branch), `PHASE-4.md` (phase-4 branch), `PHASE-5.md` (phase-5
-> branch), `PHASE-6.md` (phase-6 branch) — each documents only its own
-> phase. (Previous phases' records live on in their branch docs and the
-> CHANGELOG; this file was the Phase 5 record until 2026-11-06.)
+> branch), `PHASE-6.md` (phase-6 branch), `PHASE-7.md` (phase-7 branch) —
+> each documents only its own phase. (Previous phases' records live on in
+> their branch docs and the CHANGELOG; this file was the Phase 6 record
+> until 2026-11-10.)
 
 ---
 
-## 1. Phase 6 scope (master prompt §17)
+## 1. Phase 7 scope (master prompt §17)
 
-Make the browser app behave correctly on real phones and modern mobile
-browsers — the phase the roadmap labels "Mobile/browser compatibility on
-real devices". Three known issues define the honest test surface:
+"Zoom integration (first meeting app)" — connect the verified translation
+pipeline to Zoom meetings. The roadmap's meeting phase, built on top of the
+complete browser MVP (phases 1–5) and the mobile-honest capture (phase 6).
 
-- **KI-004** — capture behavior on real devices: background tab, lock
-  screen, iOS interruptions.
-- **KI-015** — playback on real devices: autoplay policies, silent
-  switch, low-power mode.
-- **KI-018** — acoustic feedback on real hardware (loudspeaker→mic).
+## 2. Design (ADR-0019)
 
-The sandbox has no physical device, so Phase 6 delivers (a) every behavior
-that CODE controls and that CAN be verified here, and (b) the step-by-step
-human matrix for the hardware part — with no compatibility claims made
-from the sandbox (AGENT.md §6).
-
-## 2. Design (ADR-0016)
-
-- **Honest capture lifecycle.** Mobile OSes suspend capture + timers when
-  a tab is backgrounded; the old code kept a fake "recording" state
-  streaming silence. Now: `visibilitychange → hidden` finalizes the
-  recording exactly like a connection loss (capture stopped, buffer
-  flushed, playback + feedback guard cleared) with a plain-language
-  banner; `pagehide` finalizes quietly; the capture `AudioContext` gets a
-  `statechange` watchdog (`onStateLost`) for iOS `interrupted` (calls,
-  Siri); returning to the tab re-arms playback via a resume that NEVER
-  creates an `AudioContext` (autoplay-safe `resumeIfCreated`).
-- **Screen Wake Lock** (`services/wakeLock.ts`, progressive enhancement):
-  acquired while the mic is open, released on finalize, OS-dropped
-  sentinels forgotten; denials (low-power mode) degrade silently.
-- **Coarse platform telemetry.** Protocol v1 stays v1 additively: optional
-  `hello.config.client.platform` (lowercase tag ≤ 24 chars, e.g.
-  `ios-safari` — never a raw user-agent); `/health` aggregates connected
-  clients into `sessions.by_platform`, giving the human device matrix a
-  ground-truth signal. Older clients omit it; never required; not echoed.
-- **PWA-lite + mobile comfort CSS.** `manifest.webmanifest` + generated
-  192/512 px icons + apple/mobile-web-app metas; `overscroll-behavior-y:
-  none` (no pull-to-refresh reload mid-recording); 16 px form controls
-  (no iOS focus zoom); sticky capture panel on small screens (mic always
-  reachable); ≥ 44 px touch targets; no framework, no new dependency.
+- **The bridge orchestrates; the pipeline stays the product.** Zoom's
+  Real-Time Media Streams (RTMS — the documented WebSocket media plane for
+  AI notetakers/translation, no bot participant) delivers the meeting's
+  mixed audio; the bridge feeds it into the app's OWN `/ws/audio` endpoint
+  as an ordinary protocol-v1 client — one code path, every Phase 1–6
+  behavior (Silero gating, segmentation, decision engine, pass-through
+  relay, Piper voice, rooms) applies unchanged. AGENT.md §4's rule (engine
+  independent of meeting adapters) is preserved by construction.
+- **Webhook-driven lifecycle.** `POST /zoom/webhook` answers
+  `endpoint.url_validation` with the exact HMAC challenge response,
+  verifies `x-zm-signature` (v0) on every delivery when
+  `zoom_secret_token` is configured, acknowledges `meeting.rtms_started`
+  200-immediately (Zoom's documented duplicate-connection gotcha) and
+  spawns one `ZoomMeetingWorker` per meeting; `meeting.rtms_stopped`
+  (uuid-only payloads tolerated) stops it with the graceful
+  `STREAM_CLOSE_REQ`.
+- **Raw L16 audio — no codec dependency.** The media handshake requests
+  uncompressed PCM16 at 16 kHz mono (20 ms send rate) — byte-for-byte the
+  pipeline's native format; the spec's G.711/G.722/Opus paths are simply
+  not requested. Keep-alives (12→13) are answered on both sockets; a
+  bounded drop-on-full queue decouples the RTMS loop from a slow consumer.
+- **The human is the room's guest.** The bridge hosts a normal
+  two-participant room (pair from `zoom_native_language`/
+  `zoom_preferred_language`, platform tag `zoom-bridge`); the meeting's
+  invite is published at `GET /zoom/meetings`. The translator user opens
+  `…/?room=CODE` and gets the full Phase 5 experience for the meeting:
+  speaker-tagged transcript, translations, and the translated voice on
+  their own device — routed only to the listener. Nothing is injected
+  back INTO the meeting in v1 (RTMS has no per-listener addressing;
+  KI-031).
+- **OFF unless configured.** Routes mount only when `zoom_enabled` AND
+  client credentials exist; disabled → 404/SPA-catch-all and
+  `/health.zoom.enabled=false`. Secrets live only in backend env vars;
+  meeting UUIDs are masked in logs.
 
 ## 3. Delivery record (what was built)
 
-Backend: `ClientInfo` protocol model (`client.platform`, optional) on
-`HelloConfig`; `Session.platform` + `/health sessions.by_platform`
-aggregation; one line in the hello handler. +7 tests (validation ×7
-params, aggregation ×2, stats shape).
+Backend only (frontend untouched): `app/zoom/signing.py` (pure crypto),
+`app/zoom/rtms.py` (`RtmsClient`), `app/zoom/pipeline_client.py`
+(`PipelineClient`), `app/zoom/bridge.py` (`UtteranceSegmenter`,
+`ZoomMeetingWorker`, `ZoomBridge`), `app/zoom/router.py`; config block +
+`/health` zoom section; lifespan shutdown closes workers. Tests: 30 new
+(signing vectors, webhook enforcement, segmenter, RTMS protocol edges,
+bridge integration over the fake RTMS + fake pipeline server, HTTP
+surface). Tooling: `app/zoom/fake_rtms.py` (signature-verifying fake of
+Zoom's edge) + `scripts/e2e_zoom_check.py` (live E2E).
 
-Frontend: `services/platform.ts` (UA → coarse tag, pure); 
-`services/wakeLock.ts` (injectable wrapper); `audioCapture.onStateLost`
-watchdog (disarmed on stop — our own close never fires it); hook
-lifecycle effects (hidden/pagehide finalize + banner, visible →
-`resumeIfCreated`), wake-lock tie-in, platform tag in every hello;
-`SpeechPlayer.resumeIfCreated`; index.html metas + manifest; app.css
-mobile block; stale "Phase 1/Phase 5" page copy refreshed; version 0.6.0.
-+9 frontend tests (platform mapping, wake lock incl. OS-drop/deny,
-`resumeIfCreated` never creates a context).
-
-Tests/ops: `frontend/scripts/smoke_phase6.mjs` (full iPhone emulation
-against the live server — 8 checks incl. the platform tag end-to-end and
-the background-tab guard); smoke_phase2/5 restored onto `main` and re-run
-as regressions; real-device matrix written into `docs/testing.md §13b`
-(Android Chrome / iPhone Safari / two-phone room, ~15 min).
-
-## 4. Verification (measured 2026-11-06)
+## 4. Verification (measured 2026-11-10)
 
 | Check | Result |
 | --- | --- |
-| Backend suite | **177 passed + 1 xfailed** (fast markers; +7 Phase 6 tests) |
-| Frontend suite | **123/123 vitest** (+9 Phase 6), tsc clean, ESLint 0, build clean (263 kB) |
-| `smoke_phase6.mjs` (iPhone emulation, live :3000) | **8/8 PASS** — render, manifest, 0 px overflow, connect, `by_platform={"ios-safari":1}`, tap-start, tap-stop (honest `no_speech_detected` only), background-tab guard fires the honest banner |
-| Regression: `smoke_phase2.mjs` (solo) | **10/10** |
-| Regression: `smoke_phase5.mjs` (two pages) | **12/12** |
-| Live E2E: translation (Phase 3 paths) | **3/3 PASS** |
-| Live E2E: two-participant routing (Phase 5) | **4/4 PASS** — voices reach only the listener; relay without TTS; speaker stream carries text only |
+| Backend suite (+30 zoom tests) | **220 passed + 1 xfailed** |
+| Frontend suite (untouched) | **139/139**, tsc/ESLint/build clean (264.01 kB) |
+| `scripts/e2e_zoom_check.py` (live :3000, fake Zoom edge) | **5/5 PASS (17.9 s)** — url_validation; worker live + invite published; RTMS handshake (signature verified, L16/16 kHz/mono); 6.6 s ur fixture → 3 utterances → guest transcription(speaker=host) + real ur→en translation + 111,618 B routed PCM; graceful stop + STREAM_CLOSE_REQ + `/health` zoom back to zero |
+| Regression: e2e translation / two-participant / TTS | **3/3 / 4/4 / 3/3** |
+| Regression: smokes phase2 / phase5 / phase6 | **10/10 / 12/12 / 9/9** |
 | Silence guard (hallucination) | **PASS** |
+| `/health.version` | **0.7.0** |
 
 ## 5. Honest boundaries
 
-- No physical phone exists in this sandbox: everything above is device
-  EMULATION in headless Chromium. The human matrix
-  ([testing.md §13b](docs/testing.md)) — Android Chrome, iPhone Safari
-  (interruptions, silent switch, low-power mode, lock screen), acoustic
-  coupling on loudspeakers — is written and ready but NOT yet run; no
-  hardware claims are made (KI-004/KI-015/KI-018 stay open until it is).
-- Wake lock support is progressive: iOS Safari historically lacks it
-  (screen locks anyway); the app degrades to the honest-stop path.
-- The platform tag is UA-heuristic: iPadOS 13+ masquerading as desktop
-  Safari reports as desktop; accepted (observational only).
-- Transcript line deletion stays local-only (KI-016) and host language
-  changes still apply on the next connection (KI-017) — accepted Phase 5
-  scope, untouched here.
-
-## 6. QA round v0.6.1 — hello-handshake hardening (2026-11-07, ADR-0017)
-
-The independent QA verification of this phase (Journal, 2026-11-07)
-returned "CONDITIONAL": the compatibility work itself verified clean
-(24/26 live checks, developer smoke reproduced 8/8, frontend 123/123),
-but BUG-601 (HIGH) had to be fixed — after an uplink blackout the client
-could stick in "Reconnecting…" forever (hello sent once per socket, the
-server pong-answered before the handshake, hello-less sockets lived until
-the idle timeout). BUG-602 (LOW) was a stale deployed version string.
-
-Both are closed in v0.6.1. The handshake now saves itself on both sides
-(idempotent re-hello until `ready` + client watchdog; server silence on
-pre-hello pings, idempotent hello re-ack, 15 s hello timeout). Re-measured
-after the fix:
-
-| Check | Result |
-| --- | --- |
-| Backend suite (+4 BUG-601 tests) | **190 passed + 1 xfailed** |
-| Frontend suite (+2 BUG-601 tests) | **125/125**, tsc/ESLint/build clean |
-| `smoke_phase6.mjs` incl. new **M9 blackout-recovery check** | **9/9 PASS** |
-| Regression: `smoke_phase2.mjs` / `smoke_phase5.mjs` | **10/10** / **12/12** |
-| Live E2E: translation | **3/3 PASS** |
-| `/health.version` after redeploy | **0.6.1** |
-
-The real-device matrix (§13b) remains the gate for any hardware claim —
-the M9 recovery row joins it as a human-run step on a real phone.
-
-## 7. QA round v0.6.2 — device-loss honest stop + permission copy (2026-11-07, ADR-0018)
-
-Input: independent QA verification (Journal, 2026-11-07, against
-`phase-6` @ `7da3752`, deployment v0.6.1) — verdict **PASS WITH
-FINDINGS**. The Journal re-verified the v0.6.1 handshake fixes live
-(BUG-601: 14 s blackout → Connected 0.186 s after recovery, solo and
-room; BUG-602: `/health.version` 0.6.1) and reported two open defects,
-both fixed in v0.6.2:
-
-- **GAP-604 (medium):** microphone device changes were not handled at
-  all (no `devicechange` listener, no `track.onended` handler) — a lost
-  headset/Bluetooth device mid-recording kept a live-looking recording
-  streaming digital silence. Now the capture service watches the track
-  `ended` event (self-removing, exactly-once, own `stop()` disarms
-  first) and the recording is finalized honestly with
-  "Recording stopped — the microphone was disconnected. Tap the mic to
-  continue."
-- **BUG-603 (low):** a denied permission arriving as `NotSupportedError`
-  (WebViews/kiosk builds, the Journal's headless probe) rendered the raw
-  "start failed — Not supported"; now classified as permission guidance:
-  "Microphone access was refused or is unavailable — check site
-  permissions." Verified live with the Journal's exact CDP-denial
-  scenario (`frontend/scripts/probe_bug603_deny.mjs`, 4/4).
-
-Measured after the fix: frontend 139/139 (+14 audioCapture tests),
-backend 190 passed + 1 xfailed, smokes 9/9 / 10/10 / 12/12, live E2E
-translation 3/3, TTS 3/3, two-participant 4/4, synthetic 3/3, silence
-guard PASS, `/health.version` 0.6.2. The human device matrix (§13b)
-gained the device-change rows A9/B8 and remains the gate for any
-hardware claim (KI-004/015/018).
-
-## 8. QA round v0.6.3 — solo speaking chip + touch target (2026-11-08)
-
-Input: independent QA re-test (Journal (2), 2026-11-08, against
-`phase-6` @ `69941d1`, deployment v0.6.2) — verdict **PASS WITH
-FINDINGS**: 4/4 previous defects verified fixed live (BUG-601: a 14 s
-uplink blackout recovers to Connected in 1.79 s; BUG-602; GAP-604;
-BUG-603). Two new low-severity defects, both fixed in v0.6.3:
-
-- **BUG-604 (low):** solo mode — the per-line "speaking" chip never
-  rendered during TTS playback. The solo `audio` event shipped without
-  a `speaker` tag while the solo `transcription` for the same utterance
-  carries `"host"` (every session lives in a room; solo is a one-person
-  room). Clients key lines by `(speaker, id)` — the keys could never
-  match. Fixed on the wire (Journal option (a)): the `audio` event now
-  uses the same `_speaker()` rule as transcription; room-mode tagging
-  and feedback-guard arming are unchanged.
-- **BUG-605 (low):** the "copy invite link" button measured 31 px tall
-  at mobile widths — the only control below the 44 px touch-target
-  standard ADR-0016 §4 sets. `.room-panel__copy` now joins the 44 px
-  `min-height` rule in the ≤ 640 px block; desktop layout unchanged.
-- **Journal observation (not a defect):** smoke M5 asserted
-  `by_platform["ios-safari"] === 1` exactly — brittle on a shared
-  deployment (other clients' sessions count while being evicted; it
-  reported 3). Now asserts `>= 1`.
-
-Measured after the fix: backend **190 passed + 1 xfailed**, frontend
-**139/139**, tsc/ESLint clean, `smoke_phase6` **9/9** (M5 hardened),
-BUG-604 chip probe **PASS**, BUG-605 height probe **≥ 44 px**,
-`/health.version` **0.6.3**. Real-device scope is unchanged — the human
-device matrix (§13b) remains the gate for any hardware claim
-(KI-004/015/018).
+- **Zoom's production edge is NOT verified** — the sandbox has no Zoom
+  account or Marketplace app. The fake implements the documented protocol;
+  the client is defensive about the fields Zoom does not publish in full
+  (media-URL key, frame encoding). The real-Zoom checklist is
+  `docs/deployment.md §6`; tracked as KI-029.
+- Meeting-audio endpointing is coarser than the browser's (RMS pause +
+  6 s soft cap; the server VAD still gates/trims/splits) — KI-030.
+- No captions or voice are sent INTO the meeting in v1 (per-listener
+  addressing does not exist; the product's routing rule wins) — KI-031.
+- Room model unchanged: the meeting bridge occupies the host seat; a
+  server restart ends rooms and the bridge re-hellos into a fresh one
+  (the old invite dies with the room — same as browser rooms, Phase 5).
